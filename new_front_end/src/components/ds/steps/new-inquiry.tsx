@@ -46,6 +46,8 @@ import { bookingHref } from "@/components/ds/ui";
 import { fmtStay, money, plural } from "@/lib/ds/format";
 import { StayDates } from "@/components/ds/stay-dates";
 import { RateSheetCard, type RateChoice } from "@/components/ds/rate-sheet";
+import { ApartmentPlanField, IntakeApartmentRates, apartmentPlanProblem, useApartmentPlans } from "./s1-apartment";
+import type { ApartmentPlan } from "@/lib/api/apartments";
 import { STEP_NAMES, STEP_NEEDS } from "@/lib/ds/steps";
 import type { EntryDetail } from "@/types/api";
 import { Choice, Fact, Facts, FlowProgress, StepCanvas, StepCard, StepFlow, SubTabs, anchorFor, atLeast, numberFlow, revealCard, toastRefusal } from "./kit";
@@ -201,6 +203,8 @@ export function NewInquiryCanvas() {
   // "5 King + 2 Twin" — optional, may be partial.
   const [beds, setBeds] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState("");
+  // How an apartment is let (2026-11-25): monthly or weekly, beside the dates.
+  const [aptPlan, setAptPlan] = useState<ApartmentPlan | "">("");
   // The booking file's open tab — Booking until the desk picks another. A tick, a party or a package
   // picked brings it to Charges › Package (2026-11-05, operator).
   const [fileTab, setFileTab] = useState<IntakeFileTab>("details");
@@ -570,7 +574,11 @@ export function NewInquiryCanvas() {
                 : allowedRooms.length > 0 && !allowedRooms.includes(roomsN)
                   ? "a room count the party allows"
                   : undefined;
-  const roomsGuestsSet = partyOk && roomsN >= 1;
+  const isApartment = useType === "APARTMENT";
+  const aptPlans = useApartmentPlans(isApartment ? checkIn : null, isApartment ? checkOut : null);
+  const aptProblem = isApartment ? apartmentPlanProblem(aptPlan, aptPlans.data ?? null) : null;
+  // An apartment's rooms are its apartments', picked on the booking (2026-11-25).
+  const roomsGuestsSet = partyOk && (isApartment ? !aptProblem : roomsN >= 1);
 
   const saveBlockers: string[] = [];
   // "What kind of stay" opens unanswered, and the backend refuses a booking without one — so the
@@ -587,6 +595,7 @@ export function NewInquiryCanvas() {
   if (!corpComplete) saveBlockers.push("the company's reference and a contact person");
   if (!partyOk && partyHow) saveBlockers.push(partyHow);
   if (dateProblem) saveBlockers.push(dateProblem);
+  if (aptProblem) saveBlockers.push(aptProblem);
 
   /* ---------------------------------------------------------------- the save */
   const [navigating, setNavigating] = useState(false);
@@ -671,8 +680,9 @@ export function NewInquiryCanvas() {
         adultCount: a,
         childCount: c,
         childAges: agesOut,
-        numberOfRooms: Math.max(1, roomsN),
-        bedTypeRequest: bedSum > 0 ? bedRequest : undefined,
+        numberOfRooms: isApartment ? 1 : Math.max(1, roomsN),
+        bedTypeRequest: !isApartment && bedSum > 0 ? bedRequest : undefined,
+        apartmentPlan: isApartment ? aptPlan || null : undefined,
         otaSource: channel.channel === "OTA",
         contactPersonName: (titled(arrivingTitle, arrivingName) || arrivingFallbackName) || undefined,
         contactPersonPhone: (arrivingPhone || arrivingFallbackPhone) || undefined,
@@ -722,7 +732,7 @@ export function NewInquiryCanvas() {
     { label: "Use type", met: !!useType, card: "caller" },
     ...(needsCorp ? [{ label: "The company's reference", met: corpComplete, card: "caller" }] : []),
     { label: "Dates set", met: datesSet && !dateProblem, card: "stay" },
-    { label: "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
+    { label: isApartment ? "Guests set, and how the apartment is let" : "Rooms and guests set", met: roomsGuestsSet, card: "stay" },
   ], { bySection: true });
   const nextUp = flowItems.find((i) => !i.met) ?? null;
   const goToCard = (card?: string) => {
@@ -975,7 +985,7 @@ export function NewInquiryCanvas() {
                         onChange={(v) => setUseType(v)}
                       />
                       {useType === "APARTMENT" ? (
-                        <span className="hint warn-ink">an apartment needs its nights and rate tier before Negotiation — those are not on the desk yet</span>
+                        <Help label="About an apartment stay">Let by the month or the week, asked with the dates. The apartments themselves are chosen in The house, on the booking.</Help>
                       ) : useType === "CONFERENCE" ? (
                         <Help label="About a conference">The hall and its seating are added on the booking.</Help>
                       ) : null}
@@ -1077,6 +1087,21 @@ export function NewInquiryCanvas() {
                         onChange={(e) => setChildren(digits(e.target.value, 2).replace(/^0+(?=\d)/, ""))}
                       />
                     </div>
+                    {isApartment ? (
+                      <ApartmentPlanField
+                        checkIn={checkIn}
+                        checkOut={checkOut}
+                        plan={aptPlan}
+                        onPlan={(p) => {
+                          setAptPlan(p);
+                          // The packages' weekly and monthly rates on the right (2026-11-25, operator).
+                          if (p) {
+                            setFileTab("money");
+                            setFileSub("apartments");
+                          }
+                        }}
+                      />
+                    ) : (
                     <div className="field">
                       <label>
                         Rooms{roomsN < 1 ? <ReqMark /> : null}
@@ -1122,6 +1147,7 @@ export function NewInquiryCanvas() {
                         ) : null
                       )}
                     </div>
+                    )}
                     {childN > 0 ? (
                       <div className="wide field">
                         <label>Their age{childN === 1 ? "" : "s"}</label>
@@ -1170,7 +1196,7 @@ export function NewInquiryCanvas() {
                         childMealPercent={policy?.mealPricing.childPercent ?? null}
                       />
                     </div>
-                    {bedOptions.length ? (
+                    {bedOptions.length && !isApartment ? (
                       <div className="wide field">
                         <label>
                           Beds asked for · optional
@@ -1404,6 +1430,7 @@ export function NewInquiryCanvas() {
                 }}
                 checkIn={checkIn}
                 checkOut={checkOut}
+                apartmentPlan={isApartment ? aptPlan : null}
                 notes={notes}
                 setNotes={setNotes}
               />
@@ -1493,6 +1520,7 @@ function IntakeFilePanel({
   rates,
   checkIn,
   checkOut,
+  apartmentPlan,
   notes,
   setNotes,
 }: {
@@ -1503,6 +1531,8 @@ function IntakeFilePanel({
   rates: RateChoice;
   checkIn: string;
   checkOut: string;
+  /** An apartment stay: how it is let (or "" not said yet); null when the stay is not an apartment. */
+  apartmentPlan: ApartmentPlan | "" | null;
   notes: string;
   setNotes: (v: string) => void;
 }) {
@@ -1534,6 +1564,9 @@ function IntakeFilePanel({
             content: <StepCard title="Money received" status={<b>Nothing received</b>} meta="An advance is asked for at Set up." />,
           },
           { key: "package", label: "Package", content: <RateSheetCard choice={rates} checkIn={checkIn} checkOut={checkOut} /> },
+          ...(apartmentPlan !== null
+            ? [{ key: "apartments", label: "Apartments", content: <IntakeApartmentRates checkIn={checkIn} checkOut={checkOut} plan={apartmentPlan} /> }]
+            : []),
         ]}
       />
     );

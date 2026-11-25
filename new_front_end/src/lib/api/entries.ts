@@ -183,6 +183,7 @@ export async function createEntry(
     numberOfRooms?: number;
     /** Bed-setup breakdown ("5 King + 2 Twin"), map bedType → count (2026-08-13). */
     bedTypeRequest?: Record<string, number>;
+    apartmentPlan?: "MONTHLY" | "WEEKLY" | null;
     contactPersonName?: string;
     contactPersonPhone?: string;
     /** The party contact's email, pulled at intake. Optional — W4 needs only name + phone. */
@@ -240,6 +241,8 @@ export async function updateEntryIntake(
     /** The party contact's email, pulled at intake. Optional — W4 needs only name + phone. */
     contactPersonEmail?: string;
     useType?: string;
+    /** How an apartment is let; null takes it off (2026-11-25). */
+    apartmentPlan?: "MONTHLY" | "WEEKLY" | null;
     expectedVersion?: number;
   },
 ) {

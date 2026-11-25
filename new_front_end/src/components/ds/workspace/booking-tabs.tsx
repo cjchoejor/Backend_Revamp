@@ -50,6 +50,7 @@ import type { TraceEvent } from "@/lib/trace/humanize";
 import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
+import { EntryApartmentRates } from "@/components/ds/steps/s1-apartment";
 import { Choice, DsDialog, Fact, Facts, PapersCard, ReasonDialog, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry, NotSentChip } from "@/components/ds/steps/kit";
 import { FolioPapersCard } from "@/components/ds/workspace/folio-papers";
 import { HeldSendDialog, useHeldDocuments } from "@/components/ds/workspace/held-papers";
@@ -484,6 +485,10 @@ export function ChargesView({
               label: "Package",
               content: <BookingRateSheet entry={entry} />,
             },
+            // An apartment stay (2026-11-25): every package's weekly and monthly rate, and this stay's.
+            ...(entry.useType === "APARTMENT"
+              ? [{ key: "apartments", label: "Apartments", content: <EntryApartmentRates entry={entry} /> }]
+              : []),
           ]}
         />
       </div>

@@ -3059,3 +3059,34 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* Extend the stay, paid now at the desk (2026-11-25): how it was paid, and the bank and journal number. */
 .ds .ext-pay { display: grid; gap: var(--s2); margin-top: var(--s3); padding: var(--s3); border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface); max-width: 640px; }
 .ds .ext-pay .form3 { grid-template-columns: 1fr 1fr; }
+
+/* ---- An apartment stay at Inquiry (2026-11-25) ------------------------------------------------ */
+.ds .apt-plan .filters.choice { margin-top: 2px; }
+.ds .apt-house { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .apt-house-pkg { display: flex; flex-direction: column; gap: 2px; padding-bottom: var(--s2); border-bottom: 1px solid var(--line); }
+.ds .apt-house-pkg:last-of-type { border-bottom: 0; }
+.ds .apt-house-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); margin-bottom: 2px; }
+.ds .apt-house-rent { margin-left: auto; font-size: var(--t-sm); color: var(--ink-3); }
+.ds .apt-house-rent b { color: var(--ink); font-size: 15px; }
+.ds .apt-unit-row {
+  display: grid; grid-template-columns: 20px 56px minmax(0, 1fr) auto; align-items: center; gap: var(--s2);
+  padding: 6px var(--s2); border: 1px solid transparent; border-radius: var(--r-control); cursor: pointer; font-size: var(--t-sm);
+}
+.ds .apt-unit-row:hover { background: var(--surface-2); }
+.ds .apt-unit-row.on { border-color: var(--accent-line, var(--accent)); background: var(--accent-soft); }
+.ds .apt-unit-row.shut { cursor: default; color: var(--ink-3); }
+.ds .apt-unit-row.shut:hover { background: transparent; }
+.ds .apt-unit-no { font-size: 15px; }
+.ds .apt-unit-state { text-align: right; font-weight: 600; }
+.ds .apt-house-save { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s2); }
+.ds .apt-rates-list { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .apt-rate { display: flex; flex-direction: column; gap: 4px; padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
+.ds .apt-rate:last-child { border-bottom: 0; }
+.ds .apt-rate-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); }
+.ds .apt-rate-table { width: 100%; border-collapse: collapse; font-size: var(--t-sm); }
+.ds .apt-rate-table td { padding: 3px 6px; border-top: 1px solid var(--line); }
+.ds .apt-rate-table td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ds .apt-rate-table tr.on td { background: var(--accent-soft); font-weight: 700; }
+.ds .apt-rate-table tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ds .apt-periods { margin: 4px 0 0; padding: 0; list-style: none; font-size: var(--t-sm); }
+.ds .apt-periods li { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); padding: 3px 0; border-top: 1px dashed var(--line); }

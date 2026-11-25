@@ -412,8 +412,13 @@ export function s1Readiness(entry: EntryDetail): Precondition[] {
     { label: "What kind of stay", met: !!entry.useType, card: "caller" },
     { label: "Stay dates set", met: !!(entry.checkInDate && entry.checkOutDate), card: "stay" },
     { label: "Guest count set", met: (entry.guestCount ?? 0) >= 1, card: "stay" },
-    { label: "Availability searched", met: configs.length > 0, card: "house" },
-    { label: "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
+    // An apartment stay (2026-11-25): how it is let, unless the stay is under a week (charged by the
+    // night). Which plan the dates may take is the server's to refuse, in words.
+    ...(entry.useType === "APARTMENT"
+      ? [{ label: "How the apartment is let", met: !!entry.apartmentPlan || (nightsBetween(entry.checkInDate, entry.checkOutDate) ?? 0) < 7, card: "stay" }]
+      : []),
+    { label: entry.useType === "APARTMENT" ? "The apartments searched" : "Availability searched", met: configs.length > 0, card: "house" },
+    { label: entry.useType === "APARTMENT" ? "The apartments chosen" : "Preferred room selected", met: !!preferred && !pickFitsStay(preferred.optionSelected, entry, preferred.searchCriteria), card: "house" },
     { label: "The guest staying, named", met: !!entry.guestProfile, card: "wrap" },
     { label: "A contact on file", met: hasAnyContact(entry), card: "wrap" },
     // Only while one is open (2026-11-24): the move waits for the desk's answer (Policy 12).

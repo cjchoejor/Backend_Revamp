@@ -41,6 +41,8 @@ export type EntryListItem = {
   /** Set at S1 by Policy 64. GROUP_MASTER = auto-classified as group; NULL = individual. */
   groupBillingMode?: "GROUP_MASTER" | "INDIVIDUAL_FOLIO" | null;
   useType?: string | null;
+  /** How an apartment is let (2026-11-25): MONTHLY or WEEKLY; null under a week or not an apartment. */
+  apartmentPlan?: string | null;
   segmentNumber?: number;
   createdAt: string;
   updatedAt: string;
