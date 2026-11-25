@@ -44,6 +44,7 @@ import {
 } from "@/lib/api/inquiries";
 import { PhoneField } from "@/components/ds/phone-field";
 import { PersonName } from "@/components/ds/person-name";
+import { DeskTagInput, useInquiryDeskTag } from "@/components/ds/desk-tag";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
 import { fullNameOf, splitTitle, titled } from "@/lib/ds/person";
@@ -121,6 +122,9 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
   const recParty = (inq.travelAgent ?? inq.corporateAccount ?? null) as LookupPartyMatch | null;
   const recPkgs: string[] = inq.ratePackageIds?.length ? [...inq.ratePackageIds] : inq.ratePackageId ? [inq.ratePackageId] : [];
   const recRef = inq.corporateClientRef ?? "";
+  // The desk's own note (2026-11-25): saves itself when left, at any step — it is not part of the caller.
+  const tag = useInquiryDeskTag(entry.inquiry?.id, entry.inquiry?.deskTag ?? null, entry.id);
+  const tagProp = { value: tag.value, onChange: tag.onChange, onCommit: tag.commit, state: tag.state };
 
   // Booked through a party the caller on record IS the party, not someone who rang, so the caller's
   // own fields start empty: they are for a tick that leaves the party.
@@ -406,10 +410,24 @@ export function TheCaller({ entry, editable }: { entry: EntryDetail; editable: b
               </div>
             ) : null}
             <div className="wide">
-              <PersonName title={d.title} name={d.name} readOnly={!editable} onTitle={(title) => set({ title })} onName={(v) => set({ name: v })} namePlaceholder={editable ? "can wait for Wrap up" : undefined} />
+              <PersonName
+                title={d.title}
+                name={d.name}
+                readOnly={!editable}
+                onTitle={(title) => set({ title })}
+                onName={(v) => set({ name: v })}
+                namePlaceholder={editable ? "can wait for Wrap up" : undefined}
+                tag={tagProp}
+              />
             </div>
           </>
         )}
+        {/* Through an agency or a company there is no caller's name here, so the tag stands alone. */}
+        {d.party ? (
+          <div className="wide caller-tag-row">
+            <DeskTagInput value={tag.value} onChange={tag.onChange} onCommit={tag.commit} state={tag.state} />
+          </div>
+        ) : null}
         <div className="wide field">
           <label>
             What kind of stay

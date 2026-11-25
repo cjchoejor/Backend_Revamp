@@ -83,6 +83,7 @@ import { linkInquiryEmail, type InboxEmail } from "@/lib/api/inbox";
 import { DateInput } from "@/components/ds/date-input";
 import { PhoneField } from "@/components/ds/phone-field";
 import { PersonName } from "@/components/ds/person-name";
+import { DeskTagInput, tidyDeskTag } from "@/components/ds/desk-tag";
 import { usePhoneRules } from "@/hooks/use-phone-rules";
 import { nationalDigits, problemOfPhone } from "@/lib/ds/phone";
 import { fullNameOf, titled } from "@/lib/ds/person";
@@ -163,6 +164,8 @@ export function NewInquiryCanvas() {
   // The caller (2026-10-12): who rang, which is not always the guest. Title and name can wait for
   // Wrap up; a phone or an email cannot (an OTA booking needs neither).
   const [callerTitle, setCallerTitle] = useState("");
+  // The desk's own note to tell same-named guests apart (2026-11-25) — rides on the start.
+  const [deskTag, setDeskTag] = useState("");
   const [onWhatsApp, setOnWhatsApp] = useState<boolean | null>(null);
   // A caller found in the caller list (2026-10-27) — never a guest: the guest staying is named at
   // Wrap up. `beforePick` is the form as it stood, so "Not this caller" puts it back.
@@ -626,6 +629,7 @@ export function NewInquiryCanvas() {
         sourceChannel: channel.channel,
         cameInAs: channel.cameInAs,
         notes: notes.trim() || undefined,
+        deskTag: tidyDeskTag(deskTag) || null,
         proposedCheckIn: checkIn || undefined,
         proposedCheckOut: checkOut || undefined,
         travelAgentId: partyKind === "TRAVEL_AGENT" ? (party?.id ?? null) : null,
@@ -946,11 +950,23 @@ export function NewInquiryCanvas() {
                           </div>
                         ) : null}
                         <div className="wide">
-                          <PersonName title={callerTitle} name={name} onTitle={setCallerTitle} onName={setName} namePlaceholder="can wait for Wrap up" />
+                          <PersonName
+                            title={callerTitle}
+                            name={name}
+                            onTitle={setCallerTitle}
+                            onName={setName}
+                            namePlaceholder="can wait for Wrap up"
+                            tag={{ value: deskTag, onChange: setDeskTag }}
+                          />
                         </div>
                       </>
                     )}
 
+                    {partyKind ? (
+                      <div className="wide caller-tag-row">
+                        <DeskTagInput value={deskTag} onChange={setDeskTag} />
+                      </div>
+                    ) : null}
                     <div className="wide field">
                       <label>What kind of stay</label>
                       <Choice

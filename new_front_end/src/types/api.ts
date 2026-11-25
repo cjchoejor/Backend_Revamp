@@ -732,6 +732,8 @@ export type EntryDetail = EntryListItem & {
     callerPhone?: string | null;
     callerEmail?: string | null;
     callerOnWhatsApp?: boolean | null;
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). Never on a paper. */
+    deskTag?: string | null;
     /** The agency's or company's own person, kept here once a guest is named (2026-11-03). */
     partyContactName?: string | null;
     partyContactPhone?: string | null;

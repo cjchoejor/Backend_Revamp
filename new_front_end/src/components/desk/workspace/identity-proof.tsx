@@ -555,6 +555,9 @@ export function IdentityProofBlock({
   // A child's age put right (2026-11-10): at Arrival and Check-in, while the booking is live.
   const [ageFor, setAgeFor] = useState<{ index: number; age: number } | null>(null);
   const ageEditable = (entry.currentStage === "S5" || entry.currentStage === "S6") && entry.status === "ACTIVE";
+  // In house or at Check-out, an age inside the same band may still be put right (2026-11-25) — it
+  // prices nothing; the server refuses one that would move the band.
+  const lateAgeEditable = (entry.currentStage === "S7" || entry.currentStage === "S8") && entry.status === "ACTIVE";
   const [clearDetails, setClearDetails] = useState(false);
   const [clearPhoto, setClearPhoto] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -745,6 +748,16 @@ export function IdentityProofBlock({
   const inHouse = ["S7", "S8", "S9"].includes(entry.currentStage);
   const confirmedSlotCount = slots.filter((s) => lockedFor(s.key)).length;
   const confirmableSlots = slots.filter((s) => canConfirmSlot(s.key));
+  // A date of birth in another price band than its row (2026-11-25) holds the confirmation — the
+  // server refuses it too: the date put right, the two rows swapped (the booking file's Guests tab),
+  // or the child's age changed.
+  const dobBlockedRows = slots
+    .filter((sl) => items.some((i) => i.entryId === entryId && !i.hasFile && i.subjectKey === sl.key && i.ageCheck?.blocks))
+    .map((sl) => {
+      const d = items.find((i) => i.entryId === entryId && !i.hasFile && i.subjectKey === sl.key);
+      const n = d?.subjectLabel?.trim();
+      return n && n !== sl.label ? `${n} on ${sl.label}` : sl.label;
+    });
   // "Everything confirmable is confirmed" — rows with nothing on file don't count against it.
   const allLocked = slots.length > 0 && confirmedSlotCount > 0 && confirmableSlots.length === 0;
   // Edit mode = the table is NOT locked (never confirmed, or "Make changes" was pressed). The S6
@@ -1466,7 +1479,14 @@ export function IdentityProofBlock({
               const recordedAge = childIndex >= 0 ? (entry.childAges ?? [])[childIndex] : undefined;
               const saysAge = savedDetail?.ageCheck?.ageAtCheckIn;
               const offerAge =
-                ageEditable && childIndex >= 0 && saysAge != null && saysAge >= 0 && saysAge <= 17 && saysAge !== recordedAge ? saysAge : null;
+                (ageEditable || (lateAgeEditable && !savedDetail?.ageCheck?.blocks)) &&
+                childIndex >= 0 &&
+                saysAge != null &&
+                saysAge >= 0 &&
+                saysAge <= 17 &&
+                saysAge !== recordedAge
+                  ? saysAge
+                  : null;
               const ageRow = ageWarn ? (
                 <tr key={`${slot.key}-age`}>
                   <td colSpan={7} style={{ padding: "0 6px 6px" }}>
@@ -1755,7 +1775,9 @@ export function IdentityProofBlock({
           ) : (
             (() => {
               // Why it waits, said beside it — a refusal the desk can act on.
-              const why = !checkInGate
+              const why = dobBlockedRows.length
+                ? `A date of birth does not fit its row — ${dobBlockedRows.join(", ")}. Put the date right, swap the two guests' rows (Guests tab), or change the child's age`
+                : !checkInGate
                 ? confirmableSlots.length === 0
                   ? "Nothing is recorded for any guest yet"
                   : null

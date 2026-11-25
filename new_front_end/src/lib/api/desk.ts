@@ -51,6 +51,8 @@ export type DeskListRow = {
     callerLastName?: string | null;
     callerPhone?: string | null;
     callerEmail?: string | null;
+    /** The desk's own note to tell same-named guests apart — "BOLD/MOA" (2026-11-25). */
+    deskTag?: string | null;
     travelAgent: { id: string; displayName: string } | null;
     corporateAccount: { id: string; displayName: string } | null;
   } | null;

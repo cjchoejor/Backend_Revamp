@@ -2750,6 +2750,8 @@ function HoverCard({
           {b?.partyName ? <div className="hc-sub">Booked by {b.partyName}</div> : null}
           <div className="hc-facts">
             {b ? (byCaller ? fact("Guest", rowNameOf(b)) : fact("Caller", callerOfBooking(b))) : null}
+            {/* The desk's own note to tell same-named guests apart (2026-11-25). */}
+            {b?.inquiry?.deskTag ? fact("Tag", b.inquiry.deskTag) : null}
             {fact("Room", roomLine(room))}
             {fact("In this room", `${fmtRange(bar.from, bar.to)} · ${plural(nightsBetween(bar.from, bar.to), "night")} on the chart`)}
             {b?.checkInDate ? fact("Stay", `${fmtStay(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}

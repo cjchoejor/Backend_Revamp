@@ -558,6 +558,9 @@ export function s6Readiness(
     keys?: { label: string; met: boolean } | null;
     /** The rest of the bill promised at check-in (2026-10-29) — the server's `GET /checkin-payment`. */
     balance?: { promisedAtCheckIn: boolean; gateMet: boolean } | null;
+    /** Rows whose date of birth puts the guest in another price band (2026-11-25) — the server's
+     *  `ageCheck.blocks`. The FOM may check in with them as they are and say why. */
+    ageMismatches?: { rows: string[]; fomMay: boolean } | null;
   },
 ): Precondition[] {
   const g = entry.guestProfile;
@@ -585,6 +588,17 @@ export function s6Readiness(
     { label: "Identity verified", met: opts?.identityVerified ?? false, card: "identity" },
     ...(gd && !gd.vipExempt
       ? [{ label: `Guest details recorded (${gd.filledSlots}/${gd.totalSlots})`, met: gd.satisfied, card: "identity" }]
+      : []),
+    ...(opts?.ageMismatches && opts.ageMismatches.rows.length
+      ? [
+          {
+            label: opts.ageMismatches.fomMay
+              ? `Dates of birth that do not fit their rows (${opts.ageMismatches.rows.join(", ")}) — put right, or say why at check-in`
+              : `Dates of birth fit their rows — ${opts.ageMismatches.rows.join(", ")}`,
+            met: opts.ageMismatches.fomMay,
+            card: "identity",
+          },
+        ]
       : []),
     ...(opts && "registrationConfirmed" in opts
       ? [{ label: "Registration confirmed", met: !!opts.registrationConfirmed, card: "registration" }]
