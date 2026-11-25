@@ -311,55 +311,107 @@ export function ApartmentHouse({ entry, editable }: { entry: EntryDetail; editab
       {q.isError ? <p className="stop-ink">The apartments could not be read</p> : null}
       {d ? (
         <div className="apt-house">
-          {d.packages.map((p) => {
-            const rent = d.plan && p.forStay ? p.forStay[d.plan] : null;
-            return (
-              <div key={p.id} className="apt-house-pkg">
-                <div className="apt-house-head">
-                  <b>{p.name}</b>
-                  {p.carpetAreaSqft ? <span className="meta">{p.carpetAreaSqft.toLocaleString("en-GB")} sq ft</span> : null}
-                  {rent ? (
-                    <span className="apt-house-rent">
-                      this stay <b>{money(rent.total)}</b>
+          {/* The same table as the normal house (2026-11-25, operator: "can this be shown properly like how
+              it was shown in normal ones"): a header with the count, each package named once beside its
+              apartments, and the free / taken chips the room types carry. */}
+          <div className="bt-scroll">
+            <table className="table compact house-types by-type-grid apt-grid">
+              <thead>
+                <tr>
+                  <th className="bt-typeh">
+                    Package
+                    <Help label="About the apartments">
+                      The apartments on the admin console, free or taken for the whole stay. An apartment of several rooms is let
+                      whole. What the stay comes to is the rent with service charge and GST, for how the apartment is let.
+                    </Help>
+                  </th>
+                  <th>Apartment</th>
+                  <th>Rooms</th>
+                  <th className="num">Up to</th>
+                  <th className="num">
+                    <span className="bt-day">This stay</span>
+                    {d.plan ? <small className="apt-grid-sub">{PLAN_WORD[d.plan].toLowerCase()} · with taxes</small> : null}
+                  </th>
+                  <th className="every">
+                    <span className="bt-day">For the stay{d.stay ? ` · ${plural(d.stay.nights, "night")}` : ""}</span>
+                    <span className={`bt-tally ${ticked.size && room >= guests ? "done" : "short"}`} title="Guests the apartments ticked can take, of the booking's guests">
+                      <span className={`bt-tick${ticked.size && room >= guests ? "" : " off"}`} aria-hidden>
+                        ✓
+                      </span>
+                      {Math.min(room, guests)} of {plural(guests, "guest")}
                     </span>
-                  ) : null}
-                </div>
-                {p.units.map((u) => {
-                  const on = ticked.has(u.id);
-                  const shut = !u.free && !on;
-                  return (
-                    <label key={u.id} className={`apt-unit-row${on ? " on" : ""}${shut ? " shut" : ""}`}>
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        disabled={!editable || shut}
-                        onChange={(e) =>
-                          setTicked((s) => {
-                            const n = new Set(s);
-                            if (e.target.checked) n.add(u.id);
-                            else n.delete(u.id);
-                            return n;
-                          })
-                        }
-                      />
-                      <b className="apt-unit-no">{u.label}</b>
-                      <span>
-                        {u.rooms.length > 1 ? `Rooms ${u.rooms.map((r) => r.roomNumber).join(" + ")} · ` : ""}
-                        {u.rooms.map((r) => BED[r.bedType ?? ""] ?? r.roomTypeName).join(" + ")} · up to {plural(u.maxOccupants, "guest")}
-                      </span>
-                      <span className={u.free ? "ok-ink apt-unit-state" : "stop-ink apt-unit-state"}>
-                        {u.free
-                          ? "free"
-                          : u.outOfService.length
-                            ? u.outOfService[0]
-                            : `taken${u.takenBy[0] ? ` — ${u.takenBy[0].guestName ?? u.takenBy[0].entryId}, ${fmtDate(u.takenBy[0].from)} – ${fmtDate(u.takenBy[0].to)}` : ""}`}
-                      </span>
-                    </label>
-                  );
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.packages.map((p) => {
+                  const rent = d.plan && p.forStay ? p.forStay[d.plan] : null;
+                  return p.units.map((u, i) => {
+                    const on = ticked.has(u.id);
+                    const shut = !u.free && !on;
+                    const holder = u.takenBy[0];
+                    return (
+                      <tr key={u.id} className={`${on ? "apt-on" : ""}${i === 0 ? " apt-first" : ""}`}>
+                        {i === 0 ? (
+                          <td className="bt-type apt-pkg" rowSpan={p.units.length}>
+                            {p.name}
+                            {p.carpetAreaSqft ? <small>{p.carpetAreaSqft.toLocaleString("en-GB")} sq ft</small> : null}
+                          </td>
+                        ) : null}
+                        <td className="apt-no">{u.label}</td>
+                        <td>
+                          {u.rooms.length > 1 ? `Rooms ${u.rooms.map((r) => r.roomNumber).join(" + ")} · ` : ""}
+                          {u.rooms.map((r) => BED[r.bedType ?? ""] ?? r.roomTypeName).join(" + ")}
+                        </td>
+                        <td className="num">{plural(u.maxOccupants, "guest")}</td>
+                        {i === 0 ? (
+                          <td className="num apt-rent" rowSpan={p.units.length}>
+                            {rent ? <b>{money(rent.total)}</b> : <span className="meta" title="Under a week the apartment is charged by the night">by the night</span>}
+                          </td>
+                        ) : null}
+                        <td>
+                          <div className={`bt-cell${on ? " picked" : ""}`}>
+                            {u.free ? (
+                              <span className="bt-free plenty">free</span>
+                            ) : (
+                              <span className="bt-free none">{u.outOfService.length ? "out of service" : "taken"}</span>
+                            )}
+                            {u.free || on ? (
+                              <label className="apt-take">
+                                <span className="bt-take">take</span>
+                                <input
+                                  type="checkbox"
+                                  checked={on}
+                                  disabled={!editable || shut}
+                                  aria-label={`Take apartment ${u.label}`}
+                                  onChange={(e) =>
+                                    setTicked((s) => {
+                                      const n = new Set(s);
+                                      if (e.target.checked) n.add(u.id);
+                                      else n.delete(u.id);
+                                      return n;
+                                    })
+                                  }
+                                />
+                              </label>
+                            ) : (
+                              <span className="apt-held" title={holder ? `${holder.guestName ?? holder.entryId} · ${holder.entryId}` : undefined}>
+                                {u.outOfService.length
+                                  ? u.outOfService[0]
+                                  : holder
+                                    ? `${holder.guestName ?? holder.entryId} · ${fmtDate(holder.from)} – ${fmtDate(holder.to)}`
+                                    : null}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  });
                 })}
-              </div>
-            );
-          })}
+              </tbody>
+            </table>
+          </div>
           {editable ? (
             <div className="apt-house-save">
               {why && why !== "Saved" ? <span className={guests > room && ticked.size ? "stop-ink" : "meta"}>{why}</span> : null}

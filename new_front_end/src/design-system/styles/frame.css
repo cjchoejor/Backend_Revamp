@@ -3063,21 +3063,19 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* ---- An apartment stay at Inquiry (2026-11-25) ------------------------------------------------ */
 .ds .apt-plan .filters.choice { margin-top: 2px; }
 .ds .apt-house { display: flex; flex-direction: column; gap: var(--s3); }
-.ds .apt-house-pkg { display: flex; flex-direction: column; gap: 2px; padding-bottom: var(--s2); border-bottom: 1px solid var(--line); }
-.ds .apt-house-pkg:last-of-type { border-bottom: 0; }
-.ds .apt-house-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2); margin-bottom: 2px; }
-.ds .apt-house-rent { margin-left: auto; font-size: var(--t-sm); color: var(--ink-3); }
-.ds .apt-house-rent b { color: var(--ink); font-size: 15px; }
-.ds .apt-unit-row {
-  display: grid; grid-template-columns: 20px 56px minmax(0, 1fr) auto; align-items: center; gap: var(--s2);
-  padding: 6px var(--s2); border: 1px solid transparent; border-radius: var(--r-control); cursor: pointer; font-size: var(--t-sm);
-}
-.ds .apt-unit-row:hover { background: var(--surface-2); }
-.ds .apt-unit-row.on { border-color: var(--accent-line, var(--accent)); background: var(--accent-soft); }
-.ds .apt-unit-row.shut { cursor: default; color: var(--ink-3); }
-.ds .apt-unit-row.shut:hover { background: transparent; }
-.ds .apt-unit-no { font-size: 15px; }
-.ds .apt-unit-state { text-align: right; font-weight: 600; }
+/* The apartments in the normal house's table (2026-11-25). */
+.ds .by-type-grid.apt-grid:not(.desk-root *) { width: 100%; }
+.ds .apt-grid td.apt-pkg { vertical-align: top; }
+.ds .apt-grid td.apt-pkg small { display: block; font-weight: 500; font-size: 12px; color: var(--ink-3); }
+.ds .apt-grid tr.apt-first:not(:first-child) td { border-top: 2px solid var(--line-2); }
+.ds .apt-grid td.apt-no { font-weight: 700; font-size: 15px; font-variant-numeric: tabular-nums; }
+.ds .apt-grid td.apt-rent { vertical-align: top; white-space: nowrap; }
+.ds .apt-grid th.num, .ds .apt-grid td.num { text-align: right; white-space: nowrap; }
+.ds .apt-grid .apt-grid-sub { display: block; font-size: 11.5px; font-weight: 500; color: var(--ink-3); }
+.ds .apt-grid tr.apt-on td:not(.apt-pkg):not(.apt-rent) { background: var(--accent-soft); }
+.ds .apt-grid .apt-take { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.ds .apt-grid .apt-take input { width: 16px; height: 16px; cursor: pointer; }
+.ds .apt-grid .apt-held { font-size: 12.5px; color: var(--ink-3); white-space: nowrap; }
 .ds .apt-house-save { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s2); }
 .ds .apt-rates-list { display: flex; flex-direction: column; gap: var(--s3); }
 .ds .apt-rate { display: flex; flex-direction: column; gap: 4px; padding-bottom: var(--s3); border-bottom: 1px solid var(--line); }
