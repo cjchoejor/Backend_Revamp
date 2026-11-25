@@ -57,6 +57,9 @@ const IN_HOUSE = STAGE === "S7";
 const ARRIVE_IN = Math.max(0, Number(arg("--arrive-in", "0")));
 const NIGHTS_AHEAD = Math.max(1, Number(arg("--nights", "1")));
 const AGENT = arg("--agent", "").trim();
+// --by-type seals the rooms as the system's choice by room type, as the Inquiry step does when the desk picks
+// by type (2026-11-25): its papers to an agency read "Room 1", not the numbers. Without it, by number.
+const BY_TYPE = argv.includes("--by-type");
 // --tag X seeds a SECOND fixture beside the first (ids `TEST-ED-X-…`), e.g. two in-house guests
 // for a room switch (2026-10-12). Without a tag the script seeds / cleans every `TEST-ED-` row.
 const TAG = arg("--tag", "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
@@ -230,14 +233,21 @@ async function main() {
     },
   });
   const seg = await prisma.segment.create({ data: { id: `${P}SEG`, entryId: entry.id, segmentNumber: 1, stage: STAGE, createdBy: staff.id } });
-  // The rooms picked, sealed — the pick every booking carries from Inquiry (by number, the older shape).
+  // The rooms picked, sealed — the pick every booking carries from Inquiry (by number, the older shape;
+  // with --by-type, booking rooms the system chose).
   await prisma.availabilityConfiguration.create({
     data: {
       entryId: entry.id,
       segmentId: seg.id,
       searchCriteria: { checkInDate: iso(checkIn), checkOutDate: iso(checkOut), numberOfRooms: rooms.length } as Prisma.InputJsonValue,
       resultSet: {} as Prisma.InputJsonValue,
-      optionSelected: { perNight: nightDates.map((date) => ({ date, roomIds: rooms.map((r) => ({ roomId: r.id, isDeficient: false })) })), isDeficient: false } as Prisma.InputJsonValue,
+      optionSelected: {
+        perNight: nightDates.map((date) => ({ date, roomIds: rooms.map((r) => ({ roomId: r.id, isDeficient: false })) })),
+        isDeficient: false,
+        ...(BY_TYPE
+          ? { bookingRooms: rooms.map((r, i) => ({ key: `R${i + 1}`, nights: nightDates.map((date) => ({ date, roomTypeId: r.roomTypeId, roomId: r.id, fixed: false })) })) }
+          : {}),
+      } as Prisma.InputJsonValue,
       sealedAt: checkIn < new Date() ? checkIn : new Date(),
       createdBy: staff.id,
     },
