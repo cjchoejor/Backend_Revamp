@@ -2919,3 +2919,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ext-h .ext-edit { margin-left: auto; }
 .ds .ext-part.folded, .ds .ext-part.waiting { padding: var(--s3) 0; }
 .ds .ext-h { flex-wrap: wrap; }
+/* Check the rooms sits at the end of the date row (2026-11-25). */
+.ds .ext-check { align-self: flex-end; }
+.ds .ext-hint { margin: 0; }

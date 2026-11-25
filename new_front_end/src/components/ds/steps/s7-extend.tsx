@@ -153,11 +153,16 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const [ratesOpen, setRatesOpen] = useState(false);
   const [tableComps, setTableComps] = useState<RoomCompositionInput[]>([]);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // The check-out the house was last asked about — set by Check the rooms, never by typing a date
+  // (2026-11-25, operator: "need a proper search button instead of automatically searching when extra
+  // nights are changed"). A date changed after the check hides the answer until it is checked again.
+  const [checkedOut, setCheckedOut] = useState<string | null>(null);
 
   // After an extension the check-out moves on; the new date starts again a night after it.
   useEffect(() => {
     if (currentOut) setNewOut(addDays(currentOut, 1));
     setMoveTo("");
+    setCheckedOut(null);
   }, [currentOut]);
   const extra = currentOut && newOut ? nightsBetween(currentOut, newOut) : 0;
   const ask = share === "HALF" ? { mode: "PERCENT" as const, value: 50 } : share === "WHOLE" ? { mode: "PERCENT" as const, value: 100 } : { mode: unit, value: Number(figure) };
@@ -165,8 +170,8 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
 
   // What is asked of the house is debounced, so typing a figure asks once.
   const params = useMemo(
-    () => ({ newOut, moveTo, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
-    [newOut, moveTo, ask.mode, ask.value, askOk, ratesOpen, tableComps],
+    () => ({ newOut: checkedOut ?? "", moveTo, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
+    [checkedOut, moveTo, ask.mode, ask.value, askOk, ratesOpen, tableComps],
   );
   const [asked, setAsked] = useState(params);
   useEffect(() => {
@@ -178,7 +183,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const [kept, setKept] = useState<StayExtensionPreview | null>(null);
   const preview = useQuery({
     queryKey: ["stay-extension-preview", entry.id, asked],
-    enabled: !!session && extra >= 1,
+    enabled: !!session && !!asked.newOut && !!currentOut && nightsBetween(currentOut, asked.newOut) >= 1,
     placeholderData: (prev) => prev,
     queryFn: () =>
       previewStayExtension(session!, entry.id, {
@@ -190,7 +195,15 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
         askValue: asked.askValue,
       }),
   });
-  const p = preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
+  const stale = checkedOut !== newOut;
+  const p = !stale && preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
+  const checking = !stale && preview.isFetching && !p;
+  const check = () => {
+    setMoveTo("");
+    // Pressed again on the same date, the house is asked afresh.
+    if (checkedOut === newOut) void preview.refetch();
+    else setCheckedOut(newOut);
+  };
   useEffect(() => {
     if (preview.data) setKept(preview.data);
   }, [preview.data, setKept]);
@@ -260,7 +273,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     if (!roomsOk && at > 1) setAt(1);
   }, [roomsOk, at]);
   const part1Ready = roomsOk && !preview.isFetching;
-  const part1Why = !p ? (extra < 1 ? "Pick a check-out after the current one" : "Asking the house…") : p.blockedReason ? (replaced ? "Pick the room the guest moves to" : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
+  const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (replaced ? "Pick the room the guest moves to" : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
   const roomsLine = !p
     ? ""
     : p.moves.length
@@ -315,13 +328,29 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                     </Button>
                   </span>
                 </div>
+                <div className="field ext-check">
+                  <Button
+                    className={stale && extra >= 1 ? "go" : undefined}
+                    kind={stale ? "primary" : "secondary"}
+                    state={checking ? "working" : extra >= 1 ? "default" : "inert"}
+                    workingLabel="Checking…"
+                    title={extra >= 1 ? undefined : "Pick a check-out after the current one"}
+                    onClick={check}
+                  >
+                    {checkedOut && !stale ? "Check again" : "Check the rooms"}
+                  </Button>
+                </div>
               </div>
 
-              {/* What the house said */}
-              {extra < 1 ? null : preview.isError && !p ? (
+              {/* What the house said — only for the dates it was asked about */}
+              {extra < 1 ? null : stale ? (
+                <p className="meta ext-hint">
+                  {checkedOut ? "The dates changed — " : ""}Press <b>Check the rooms</b> to see whether the {plural(extra, "night")} from {fmtDay(currentOut)} {extra === 1 ? "is" : "are"} free.
+                </p>
+              ) : preview.isError && !p ? (
                 <p className="stop-ink sm" role="alert">{preview.error instanceof ApiError ? preview.error.message : "The house could not be asked — try again"}</p>
               ) : !p ? (
-                <p className="meta">Asking the house about {fmtDay(newOut)}…</p>
+                <p className="meta">Checking the rooms…</p>
               ) : (
                 <RoomsAnswer p={p} />
               )}
