@@ -196,8 +196,13 @@ function RateReferenceView({
    * column, so the figures line up down the page and nothing drops onto the next line. A wide table
    * scrolls inside its own box rather than wrapping.
    */
-  const hasBasis = ref.roomTypes.some((t) => t.roomRateSource !== "STANDARD_RATE_PLAN");
-  const hasMsr = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null);
+  // A room type whose rooms here are an apartment let by the month or the week (2026-11-25): its room
+  // is priced by the rent, not a nightly rate, takes no extra bed, and no floor applies.
+  const apartmentNumbers = new Set((ref.apartments ?? []).flatMap((a) => a.roomNumbers));
+  const isApartment = (t: EntryRateReference["roomTypes"][number]) =>
+    t.roomNumbers.length > 0 && t.roomNumbers.every((n) => apartmentNumbers.has(n));
+  const hasBasis = ref.roomTypes.some((t) => t.roomRateSource !== "STANDARD_RATE_PLAN" && !isApartment(t));
+  const hasMsr = ref.roomTypes.some((t) => t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null && !isApartment(t));
   const columns = [
     "max-content",
     "max-content",
@@ -312,17 +317,29 @@ function RateReferenceView({
                 {note ? <span style={MUTED}>{note}</span> : null}
               </div>
               <div style={cell({ right: true })}>
-                <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>
+                {isApartment(t) ? (
+                  <b style={RATE} title="Let as an apartment — priced by its rent, below">
+                    rent
+                  </b>
+                ) : (
+                  <b className="mono" style={RATE}>{moneyOrDash(t.roomRate, ref.currency)}</b>
+                )}
               </div>
               {visibleAddOns.map(([key]) => (
                 <div key={key} style={cell({ right: true })}>
-                  <b className="mono" style={RATE}>{moneyOrDash(t[key], ref.currency)}</b>
+                  {isApartment(t) && key === "extraBedRate" ? (
+                    <span style={MUTED} title="An apartment's rooms take no extra bed">
+                      —
+                    </span>
+                  ) : (
+                    <b className="mono" style={RATE}>{moneyOrDash(t[key], ref.currency)}</b>
+                  )}
                 </div>
               ))}
-              {hasBasis ? <div style={cell({})}>{basisOf(t)}</div> : null}
+              {hasBasis ? <div style={cell({})}>{isApartment(t) ? null : basisOf(t)}</div> : null}
               {hasMsr ? (
                 <div style={cell({})}>
-                  {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null ? (
+                  {t.roomRateSource === "STANDARD_RATE_PLAN" && t.msrValue != null && !isApartment(t) ? (
                     <span
                       className="mono"
                       style={FLOOR}
@@ -341,6 +358,21 @@ function RateReferenceView({
             </Fragment>
           );
         })}
+
+        {/* The rent of each apartment, the server's figures (2026-11-25). */}
+        {(ref.apartments ?? []).map((a) => (
+          <div
+            key={a.label}
+            style={{ gridColumn: "1 / -1", padding: "6px 0", borderTop: "1px solid var(--line, #e3d9c8)", color: "var(--ink, #1e1c19)", whiteSpace: "normal" }}
+          >
+            <b>
+              Apartment {a.label} · {a.packageName}
+            </b>
+            {a.roomNumbers.length > 1 ? ` · Rooms ${a.roomNumbers.join(" + ")}` : ""} · let {a.plan === "MONTHLY" ? "monthly" : "weekly"} at{" "}
+            <b className="mono">{moneyOrDash(a.rent.total, ref.currency)}</b> a {a.plan === "MONTHLY" ? "month" : "week"} with service charge and GST{" "}
+            <span style={MUTED}>({moneyOrDash(a.rent.rate, ref.currency)} without)</span> — no extra bed.
+          </div>
+        ))}
 
         {/* A plan at a figure of its own is charged in place of the meals above, so the meals alone would not explain the bill (2026-11-04). */}
         {ref.plansOff?.length ? (

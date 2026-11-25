@@ -941,6 +941,21 @@ export type EntryRateReference = {
   packages?: Array<{ id: string; name: string }>;
   /** Whether a room type's package may still be changed (Inquiry and Negotiation). */
   packagesEditable?: boolean;
+  /**
+   * The apartments among these rooms on a booking let by the month or the week (2026-11-25): no
+   * extra bed there, a room may stand empty while another of its apartment holds the guests, and
+   * the room rate is the rent. Empty on any other booking.
+   */
+  apartments?: Array<{
+    label: string;
+    plan: "MONTHLY" | "WEEKLY";
+    packageName: string;
+    leadRoomId: string;
+    roomIds: string[];
+    roomNumbers: string[];
+    /** One month's or week's rent, without and with service charge and GST — the server's figures. */
+    rent: { rate: string; total: string };
+  }>;
 };
 
 /** Which of the booking's chosen packages prices one room type of this stay (2026-11-13). Null = the primary. */
