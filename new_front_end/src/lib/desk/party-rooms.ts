@@ -68,6 +68,27 @@ export type PartySeatingIssues = {
  * answer is `GET /api/entries/:id/party-seating`, and the fix is its `/repair`. Vacuously OK
  * when the booking carries no composition (nothing to seat).
  */
+/**
+ * The rooms let together as one apartment (2026-11-25), as the booking was priced: each room of an
+ * apartment carries its rent with the apartment's first room. Mirror of the backend's
+ * `apartmentGroupsFromTerms` (lib/party-seating.ts) — keep the two in step.
+ */
+export function apartmentGroupsOf(entry: EntryDetail): string[][] {
+  const quotes = [...(entry.quotations ?? [])].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  for (const terms of [entry.reservation?.frozenCommercialTerms, ...quotes.map((q) => q.commercialTerms)]) {
+    const rows = (terms as { compositionTotals?: { perRoom?: unknown } } | null | undefined)?.compositionTotals?.perRoom;
+    if (!Array.isArray(rows)) continue;
+    const byLead = new Map<string, string[]>();
+    for (const r of rows as Array<{ roomId?: unknown; rent?: { leadRoomId?: unknown } | null }>) {
+      const lead = r?.rent?.leadRoomId;
+      if (typeof r?.roomId !== "string" || typeof lead !== "string" || !lead) continue;
+      byLead.set(lead, [...(byLead.get(lead) ?? []), r.roomId]);
+    }
+    if (byLead.size) return [...byLead.values()].filter((g) => g.length > 1);
+  }
+  return [];
+}
+
 export function partySeatingIssues(entry: EntryDetail, youngMax = 5, childMax = 10): PartySeatingIssues {
   const comps = operativeRoomCompositions(entry);
   if (!comps) return { unseated: [], emptyRooms: [], strayRooms: [], ok: true };
@@ -75,9 +96,16 @@ export function partySeatingIssues(entry: EntryDetail, youngMax = 5, childMax = 
   const unseated = [...partySlotLabels(entry).keys()].filter((k) => !(seated.get(k)?.length ?? 0));
   const plan = [...roomNightsByRoom(entry).keys()];
   const planSet = new Set(plan);
-  const emptyRooms = plan.filter((id) => {
+  const occupants = (id: string) => {
     const c = comps.find((x) => x.roomId === id);
-    return !c || (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) === 0;
+    return c ? (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) : 0;
+  };
+  const groups = apartmentGroupsOf(entry);
+  const emptyRooms = plan.filter((id) => {
+    if (occupants(id) > 0) return false;
+    // An apartment's room may stand empty while another of its rooms holds the guests (2026-11-25).
+    const group = groups.find((g) => g.includes(id));
+    return !group || !group.some((other) => occupants(other) > 0);
   });
   const strayRooms = comps.map((c) => c.roomId).filter((id) => !!id && !planSet.has(id));
   return { unseated, emptyRooms, strayRooms, ok: unseated.length === 0 && emptyRooms.length === 0 && strayRooms.length === 0 };
