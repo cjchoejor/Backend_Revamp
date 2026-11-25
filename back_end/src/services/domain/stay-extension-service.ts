@@ -305,6 +305,10 @@ export async function previewStayExtension(
   const entry = await loadExtensionEntry(prisma, entryId);
   if (entry.currentStage !== Stage.S7) throw new ValidationError(`A stay is extended from the Stay step (S7) — this booking is at ${entry.currentStage}`);
   if (entry.status !== "ACTIVE") throw new ValidationError(`The booking is ${entry.status.toLowerCase()} — its record is read-only`);
+  {
+    const { refuseInHouseApartmentChange } = await import("./apartment-booking-service.js");
+    await refuseInHouseApartmentChange(prisma, entryId, "Extending the stay");
+  }
   const checkIn = entry.reservation?.frozenCheckInDate ?? entry.checkInDate;
   const currentCheckOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
   if (!checkIn || !currentCheckOut) throw new ValidationError("This booking has no stay dates");

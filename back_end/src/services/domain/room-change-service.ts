@@ -3578,6 +3578,10 @@ export async function changeRoomToNewSegment(
   ...args: Parameters<typeof changeRoomToNewSegmentInner>
 ): ReturnType<typeof changeRoomToNewSegmentInner> {
   const input = args[2];
+  {
+    const { refuseInHouseApartmentChange } = await import("./apartment-booking-service.js");
+    await refuseInHouseApartmentChange(args[0], input.entryId, input.extension ? "Extending the stay" : "Changing the room or its setup");
+  }
   const { readBedsBefore, carryBedsToNewRooms } = await import("./entry-bed-plan-service.js");
   const bedsBefore = input.dryRun ? null : await readBedsBefore(args[0], input.entryId);
   const out = await changeRoomToNewSegmentInner(...args);

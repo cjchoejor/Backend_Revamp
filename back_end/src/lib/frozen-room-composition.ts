@@ -52,7 +52,41 @@ type PerRoomRow = {
   mealsSubtotal?: unknown;
   accommodationNet?: unknown;
   mealsNet?: unknown;
+  rent?: unknown;
 };
+
+/** An apartment's rent as the quotation stored it (2026-11-25): period by period, each one line. */
+export type FrozenRent = {
+  plan: "MONTHLY" | "WEEKLY";
+  unitLabel: string;
+  packageName: string;
+  leadRoomId: string;
+  /** The plan's rate without taxes; read from a whole period when the quotation predates it. */
+  rate: string | null;
+  periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; net: string }>;
+};
+
+function readRent(v: unknown): FrozenRent | null {
+  if (!v || typeof v !== "object") return null;
+  const r = v as Partial<FrozenRent>;
+  if ((r.plan !== "MONTHLY" && r.plan !== "WEEKLY") || !Array.isArray(r.periods)) return null;
+  return {
+    plan: r.plan,
+    unitLabel: String(r.unitLabel ?? ""),
+    packageName: String(r.packageName ?? ""),
+    leadRoomId: String(r.leadRoomId ?? ""),
+    rate: r.rate != null ? String(r.rate) : (r.periods.find((p) => p && p.whole)?.net ?? null),
+    periods: r.periods
+      .filter((p) => p && typeof p.from === "string" && typeof p.to === "string")
+      .map((p) => ({ from: p.from.slice(0, 10), to: p.to.slice(0, 10), nights: Number(p.nights) || 0, ofNights: Number(p.ofNights) || 0, whole: p.whole === true, net: String(p.net) })),
+  };
+}
+
+/** The rent period a night falls in, for a room let as an apartment; null on a room priced by the night. */
+export function rentPeriodOn(rent: FrozenRent | null | undefined, nightYmd: string) {
+  if (!rent) return null;
+  return rent.periods.find((p) => p.from <= nightYmd && nightYmd < p.to) ?? null;
+}
 
 function perRoomRows(terms: Prisma.JsonValue | null | undefined): PerRoomRow[] {
   const rows = (terms as { compositionTotals?: { perRoom?: unknown } } | null | undefined)?.compositionTotals?.perRoom;
@@ -73,8 +107,8 @@ const n = (v: unknown): number => {
  */
 export function frozenCompositionByRoom(
   sources: Array<Prisma.JsonValue | null | undefined>,
-): Map<string, { nights: number; subtotal: number; accommodation: number; meals: number }> {
-  const out = new Map<string, { nights: number; subtotal: number; accommodation: number; meals: number }>();
+): Map<string, { nights: number; subtotal: number; accommodation: number; meals: number; rent?: FrozenRent | null }> {
+  const out = new Map<string, { nights: number; subtotal: number; accommodation: number; meals: number; rent?: FrozenRent | null }>();
   for (const terms of sources) {
     for (const r of perRoomRows(terms)) {
       const roomId = typeof r.roomId === "string" ? r.roomId : null;
@@ -83,7 +117,7 @@ export function frozenCompositionByRoom(
       // A quotation priced from 2026-11-10 stores the split itself — the room line and the meal
       // line after any discount, exactly as its tax was worked out — so it is read as stored.
       if (r.accommodationNet != null && r.mealsNet != null && r.subtotal != null) {
-        out.set(roomId, { nights, subtotal: n(r.subtotal), accommodation: n(r.accommodationNet), meals: n(r.mealsNet) });
+        out.set(roomId, { nights, subtotal: n(r.subtotal), accommodation: n(r.accommodationNet), meals: n(r.mealsNet), rent: readRent(r.rent) });
         continue;
       }
       const mealsRaw = n(r.mealsSubtotal);

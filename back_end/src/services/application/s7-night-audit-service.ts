@@ -6,7 +6,8 @@ import { MissingConfigurationError, NotFoundError, ValidationError } from "../..
 import { randomUUID } from "node:crypto";
 import { recalculateNextDayTimers } from "../infrastructure/next-day-timer-service.js";
 import { allocateReadableId, allocateFolioLineId } from "../../lib/readable-id.js";
-import { frozenCompositionByRoom, splitFrozenRow } from "../../lib/frozen-room-composition.js";
+import { frozenCompositionByRoom, rentPeriodOn, splitFrozenRow } from "../../lib/frozen-room-composition.js";
+import { periodWords } from "../../lib/apartment-rent.js";
 import { lineTax, shareForNight } from "../../lib/stay-posting.js";
 import { maybePromptInterimPaymentTx } from "../domain/interim-payment-service.js";
 import { enforceFolioLiveForNightAuditProcessing } from "../../policies/13-billing-model/p31-folio-live-charge-and-night-audit-context.js";
@@ -101,17 +102,34 @@ export async function isBookingNightPosted(prisma: PrismaClient, entryId: string
   const op = operatingDateUtc(operatingDate);
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
-    include: { reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } }, folio: { select: { id: true } }, roomAssignments: true },
+    include: { reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } }, folio: { select: { id: true } }, roomAssignments: true },
   });
   if (!entry || !entry.folio) return false;
   const active = assignmentsActiveOn(entry, op.getTime());
   if (active.length === 0) return true;
-  const lines = await prisma.folioLine.findMany({
-    where: { folioId: entry.folio.id, lineType: FolioLineType.ROOM_CHARGE, chargeDate: op, roomId: { in: active.map((a) => a.roomId) } },
-    select: { roomId: true },
+  // An apartment's night is posted when its rent period's line is (2026-11-25): the rent goes on
+  // the period's first night, and a room let with its apartment carries none of its own.
+  const rentOf = frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]);
+  const opYmd = op.toISOString().slice(0, 10);
+  const needs = active.flatMap((a) => {
+    const rent = rentOf.get(a.roomId)?.rent ?? null;
+    if (!rent) return [{ roomId: a.roomId, date: op }];
+    const period = rentPeriodOn(rent, opYmd);
+    if (!period || !(Number(period.net) > 0)) return [];
+    return [{ roomId: a.roomId, date: new Date(`${period.from}T00:00:00.000Z`) }];
   });
-  const posted = new Set(lines.map((l) => l.roomId));
-  return active.every((a) => posted.has(a.roomId));
+  if (!needs.length) return true;
+  const lines = await prisma.folioLine.findMany({
+    where: {
+      folioId: entry.folio.id,
+      lineType: FolioLineType.ROOM_CHARGE,
+      roomId: { in: [...new Set(needs.map((x) => x.roomId))] },
+      chargeDate: { in: [...new Set(needs.map((x) => x.date.getTime()))].map((t) => new Date(t)) },
+    },
+    select: { roomId: true, chargeDate: true },
+  });
+  const posted = new Set(lines.map((l) => `${l.roomId}|${l.chargeDate.getTime()}`));
+  return needs.every((x) => posted.has(`${x.roomId}|${x.date.getTime()}`));
 }
 
 /**
@@ -285,6 +303,40 @@ export async function planNightForEntries(
           ? Number(shareForNight(split.accommodation, split.nights, nightIndex).toFixed(2))
           : fallbackRate;
         const mealsPerNight = split ? Number(shareForNight(split.meals, split.nights, nightIndex).toFixed(2)) : 0;
+
+        // An apartment let monthly or weekly (2026-11-25): the rent is posted like rent, each period
+        // as ONE line on its first night, taxed as a line, exactly as it was quoted, and nothing for
+        // the apartment on its other nights. A meal plan, if any, still by the night.
+        const rent = composition.get(a.roomId)?.rent ?? null;
+        if (rent) {
+          const opYmd = new Date(opTime).toISOString().slice(0, 10);
+          const period = rentPeriodOn(rent, opYmd);
+          if (period && period.from === opYmd && Number(period.net) > 0) {
+            perRoomPostCandidates.push({
+              assignmentId: a.id,
+              roomId: a.roomId,
+              roomNumber,
+              amount: Number(period.net),
+              lineType: FolioLineType.ROOM_CHARGE,
+              description: `${NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX} · Room ${roomNumber} · rent, apartment ${rent.unitLabel} · ${periodWords(period, rent.plan)}`,
+              serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
+              gstApplies: a.isFoc ? false : a.gstApplies !== false,
+            });
+          }
+          if (mealsPerNight > 0) {
+            perRoomPostCandidates.push({
+              assignmentId: a.id,
+              roomId: a.roomId,
+              roomNumber,
+              amount: mealsPerNight,
+              lineType: FolioLineType.F_AND_B,
+              description: `${NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX} · Room ${roomNumber}`,
+              serviceChargeApplies: a.isFoc ? false : a.serviceChargeApplies !== false,
+              gstApplies: a.isFoc ? false : a.gstApplies !== false,
+            });
+          }
+          continue;
+        }
 
         perRoomPostCandidates.push({
           assignmentId: a.id,

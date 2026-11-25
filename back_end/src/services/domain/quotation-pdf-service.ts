@@ -479,6 +479,8 @@ async function buildQuotationDocRender(
           .filter((n) => n.date)
           .map((n) => ({ date: String(n.date).slice(0, 10), meals: Number(n.meals ?? 0), extraBeds: n.extraBeds ?? null })),
         roomLabel: opts?.roomLabels?.get(r.roomId) ?? null,
+        // An apartment's rent, period by period (2026-11-25).
+        rent: (r as unknown as { rent?: PriceLineRoom["rent"] }).rent ?? null,
       };
       paperRooms.push(priceRoom);
 

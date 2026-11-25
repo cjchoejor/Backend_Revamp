@@ -33,6 +33,8 @@
 import { PrismaClient, Prisma } from "@prisma/client";
 import { hotelTodayUtc } from "../src/lib/stay-dates.js";
 import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../src/lib/room-flag-repair.js";
+import { computeQuotationCompositionTotals } from "../src/lib/room-composition.js";
+import { rentForBookingRooms } from "../src/services/domain/apartment-booking-service.js";
 
 const prisma = new PrismaClient();
 const argv = process.argv.slice(2);
@@ -60,6 +62,10 @@ const AGENT = arg("--agent", "").trim();
 // --by-type seals the rooms as the system's choice by room type, as the Inquiry step does when the desk picks
 // by type (2026-11-25): its papers to an agency read "Room 1", not the numbers. Without it, by number.
 const BY_TYPE = argv.includes("--by-type");
+// --apartment WEEKLY|MONTHLY (2026-11-25): an apartment stay let by the week or the month, its rooms
+// priced by their rent through the real rent rule (lib/apartment-rent.ts), and the terms frozen on
+// the reservation as Reserve freezes them, so the night audit reads what a real booking carries.
+const APT_PLAN = ["WEEKLY", "MONTHLY"].includes(arg("--apartment", "").toUpperCase()) ? (arg("--apartment", "").toUpperCase() as "WEEKLY" | "MONTHLY") : null;
 // --tag X seeds a SECOND fixture beside the first (ids `TEST-ED-X-…`), e.g. two in-house guests
 // for a room switch (2026-10-12). Without a tag the script seeds / cleans every `TEST-ED-` row.
 const TAG = arg("--tag", "").replace(/[^A-Za-z0-9]/g, "").toUpperCase();
@@ -192,16 +198,64 @@ async function main() {
   const gstRow = await prisma.configurationEntry.findFirst({ where: { configKey: "billing.salesTaxRate", effectiveTo: null }, orderBy: { effectiveFrom: "desc" } });
   const sc = Number(scRow?.configValue ?? 0.1);
   const gst = Number(gstRow?.configValue ?? 0.05);
-  const subtotal = new Prisma.Decimal(RATE).mul(nights);
-  const total = subtotal.mul(1 + sc).mul(1 + gst).toDecimalPlaces(2);
-  const scAmount = subtotal.mul(sc).toDecimalPlaces(2);
-  const gstAmount = total.sub(subtotal).sub(scAmount);
+  let subtotal = new Prisma.Decimal(RATE).mul(nights);
+  let total = subtotal.mul(1 + sc).mul(1 + gst).toDecimalPlaces(2);
+  let scAmount = subtotal.mul(sc).toDecimalPlaces(2);
+  let gstAmount = total.sub(subtotal).sub(scAmount);
+  // An apartment: each room priced by its rent, as the quotation prices it.
+  const aptRent = APT_PLAN
+    ? await rentForBookingRooms(prisma, { useType: "APARTMENT", apartmentPlan: APT_PLAN, checkInDate: checkIn, checkOutDate: checkOut }, rooms.map((r) => r.id))
+    : null;
+  if (APT_PLAN && aptRent && aptRent.size !== rooms.length) throw new Error("--apartment needs every room to be in an apartment (and an apartment's rooms together)");
+  const aptTotals = aptRent
+    ? computeQuotationCompositionTotals(
+        rooms.map((r) => ({
+          roomId: r.id,
+          roomNumber: r.roomNumber,
+          input: { rent: aptRent.get(r.id) ?? null, occupantCount: 2, adultCount: 2, extraBedCount: 0, startDate: checkIn, endDate: checkOut },
+          ctx: {
+            defaultRoomRate: new Prisma.Decimal(RATE),
+            defaultExtraBedRate: new Prisma.Decimal(0),
+            defaultBreakfastRate: new Prisma.Decimal(0),
+            defaultLunchRate: new Prisma.Decimal(0),
+            defaultDinnerRate: new Prisma.Decimal(0),
+            serviceChargeRate: sc,
+            gstRate: gst,
+            nights,
+          },
+        })),
+      )
+    : null;
+  const perRoomOf = (roomId: string) => aptTotals?.perRoom.find((x) => x.roomId === roomId) ?? null;
 
   console.log(
     `${STAGE} test booking${agent ? ` through ${agent.displayName}` : ""}: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights${IN_HOUSE ? `, ${SLEPT} slept` : ""}) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
   );
   if (!COMMIT) return console.log("(dry run — pass --commit to write)");
 
+  const aptTerms = () =>
+    ({
+      roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0 })),
+      compositionTotals: {
+        subtotal: Number(aptTotals!.subtotal.toFixed(2)),
+        serviceCharge: Number(aptTotals!.serviceCharge.toFixed(2)),
+        gst: Number(aptTotals!.gst.toFixed(2)),
+        total: Number(aptTotals!.total.toFixed(2)),
+        perRoom: aptTotals!.perRoom.map((x) => ({
+          roomId: x.roomId,
+          roomNumber: x.roomNumber,
+          nights: x.nights,
+          roomRate: Number(x.roomRate.toFixed(2)),
+          subtotal: Number(x.subtotal.toFixed(2)),
+          accommodationNet: Number(x.accommodationNet.toFixed(2)),
+          mealsNet: Number(x.mealsNet.toFixed(2)),
+          serviceCharge: Number(x.serviceCharge.toFixed(2)),
+          gst: Number(x.gst.toFixed(2)),
+          total: Number(x.total.toFixed(2)),
+          ...(x.rent ? { rent: x.rent } : {}),
+        })),
+      },
+    }) as Prisma.InputJsonValue;
   const gp = await prisma.guestProfile.create({ data: { id: `${P}GP`, firstName: GUEST_FIRST, lastName: GUEST_LAST, phone: "+97517000099", email: null } });
   const inq = await prisma.inquiry.create({
     data: {
@@ -219,7 +273,8 @@ async function main() {
       id: `${P}ENT`,
       inquiryId: inq.id,
       guestProfileId: gp.id,
-      useType: "LEISURE",
+      useType: APT_PLAN ? "APARTMENT" : "LEISURE",
+      ...(APT_PLAN ? { apartmentPlan: APT_PLAN } : {}),
       status: "ACTIVE",
       currentStage: STAGE,
       checkInDate: checkIn,
@@ -268,6 +323,7 @@ async function main() {
       frozenRate: new Prisma.Decimal(RATE), frozenRatePlanId: ratePlan?.id ?? `${P}PLAN`,
       frozenBillingModel: "GUEST_PAY", frozenCheckInDate: checkIn, frozenCheckOutDate: checkOut,
       frozenGuestCount: party, confirmedAt: IN_HOUSE ? checkIn : new Date(), confirmedBy: staff.id,
+      ...(aptTotals ? { frozenCommercialTerms: aptTerms() } : {}),
     },
   });
   await prisma.entry.update({ where: { id: entry.id }, data: { currentReservationId: `${P}RES` } });
@@ -296,7 +352,7 @@ async function main() {
     },
   });
   await prisma.invoice.create({
-    data: { id: `${P}INV`, folioId: `${P}FOL`, entryId: entry.id, invoiceType: "PROFORMA", state: "DRAFT", totalAmount: total } as Prisma.InvoiceUncheckedCreateInput,
+    data: { id: `${P}INV`, folioId: `${P}FOL`, entryId: entry.id, invoiceType: "PROFORMA", state: "DRAFT", totalAmount: aptTotals ? aptTotals.total : total } as Prisma.InvoiceUncheckedCreateInput,
   });
   // The PRICED BASIS (2026-10-06). Without a quotation carrying `roomCompositions`, a room change
   // or an extension re-quotes from nothing: the silent quote comes out FLAT, so the new room's
@@ -312,8 +368,8 @@ async function main() {
       createdBy: staff.id,
       state: "ACCEPTED",
       acceptedAt: IN_HOUSE ? checkIn : new Date(),
-      totalAmount: total.mul(rooms.length),
-      commercialTerms: {
+      totalAmount: aptTotals ? aptTotals.total : total.mul(rooms.length),
+      commercialTerms: aptTotals ? aptTerms() : {
         roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, negotiatedRoomRate: RATE })),
         // The figures a real quotation stores (2026-10-30): net, service charge and GST beside the
         // total, and each room by its number — the booking file's price prints them.
@@ -342,7 +398,9 @@ async function main() {
       await prisma.roomAssignment.create({
         data: {
           id: `${P}RA${i === 0 ? "" : i + 1}`, entryId: entry.id, roomId: r.id, assignedBy: staff.id, startDate: checkIn, endDate: checkOut,
-          occupantCount: 2, adultCount: 2, frozenSubtotal: subtotal, frozenTotal: total,
+          occupantCount: 2, adultCount: 2,
+          frozenSubtotal: perRoomOf(r.id)?.subtotal ?? subtotal,
+          frozenTotal: perRoomOf(r.id)?.total ?? total,
           ...(IN_HOUSE ? { keyIssuedAt: checkIn, keyIssuedBy: staff.id } : {}),
         } as Prisma.RoomAssignmentUncheckedCreateInput,
       });

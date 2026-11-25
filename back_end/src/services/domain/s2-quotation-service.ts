@@ -57,6 +57,7 @@ import {
   type RoomCompositionRateContext,
 } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { rentForBookingRooms } from "./apartment-booking-service.js";
 import { Prisma } from "@prisma/client";
 import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
 import {
@@ -847,8 +848,15 @@ async function prepareQuotationDraft(
       nightDatesByRoom: perRoomNightDates,
     });
 
+    // An apartment let monthly or weekly is priced by its rent, not by the night (2026-11-25); the rent
+    // is the server's, from the booking's dates, plan and apartments — never from the desk.
+    const rentByRoom = await rentForBookingRooms(prisma, entry, input.roomCompositions.map((c) => c.roomId));
+    if (rentByRoom.size && requested && ((requested.discountPercent ?? 0) > 0 || (requested.discountAmount ?? 0) > 0)) {
+      throw new ValidationError("A discount on an apartment's rent is not possible yet — take the discount off, or agree the rent on the admin console");
+    }
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
+        rent: rentByRoom.get(c.roomId) ?? null,
         nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
         nightDates: perRoomNightDates.get(c.roomId) ?? null,
         occupantCount: c.occupantCount,
@@ -1128,6 +1136,9 @@ async function prepareQuotationDraft(
                     overridden: n.overridden,
                     extraBeds: n.extraBeds,
                   })),
+                  // An apartment's rent, period by period (2026-11-25): what the papers print and
+                  // what the night audit posts, each period as one line on its first night.
+                  ...(r.rent ? { rent: r.rent } : {}),
                 })),
               }
             : null,

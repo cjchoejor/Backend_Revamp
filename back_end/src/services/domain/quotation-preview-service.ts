@@ -13,6 +13,7 @@
  * generated quote cannot disagree. Nothing is written: no Quotation, no QuotationLine, no trace,
  * no PDF. Re-running it has no effect on the booking.
  */
+import { rentForBookingRooms } from "./apartment-booking-service.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
@@ -91,6 +92,8 @@ export type PreviewRoomLine = {
   roomId: string;
   roomNumber: string | null;
   nights: number;
+  /** An apartment's rent, period by period (2026-11-25); null for a room priced by the night. */
+  rent: ReturnType<typeof computeQuotationCompositionTotals>["perRoom"][number]["rent"];
   /** Rates actually used — the negotiated one where set, else the resolved default. */
   roomRate: number;
   extraBedRate: number;
@@ -325,6 +328,8 @@ export async function buildQuotationPreview(
       id: true,
       checkInDate: true,
       checkOutDate: true,
+      useType: true,
+      apartmentPlan: true,
       availabilityConfigs: { orderBy: { createdAt: "desc" }, take: 25 },
     },
   });
@@ -412,6 +417,13 @@ export async function buildQuotationPreview(
 
   const fallbackRef = fallbackRateType ? refByType.get(fallbackRateType) : undefined;
 
+  // An apartment let monthly or weekly is priced by its rent (2026-11-25), as the draft prices it — for
+  // the dates being priced (a stay extension's projection prices its own).
+  const rentByRoom = await rentForBookingRooms(
+    prisma,
+    { useType: String(entry.useType), apartmentPlan: entry.apartmentPlan, checkInDate: stayCheckIn ?? null, checkOutDate: stayCheckOut ?? null },
+    input.roomCompositions.map((c) => c.roomId),
+  );
   const priced = input.roomCompositions.map((c) => {
     const room = roomById.get(c.roomId);
     const typeRef = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
@@ -428,6 +440,7 @@ export async function buildQuotationPreview(
       if (own && typeRef) ref = { ...typeRef, ...own };
     }
     const compositionInput: RoomCompositionInput = {
+      rent: rentByRoom.get(c.roomId) ?? null,
       nightMealOverrides: (c.nightMealOverrides ?? []).map((o) => ({ ...o, date: new Date(o.date) })),
       nightDates: perRoomNightDates.get(c.roomId) ?? null,
       occupantCount: c.occupantCount,
@@ -482,7 +495,8 @@ export async function buildQuotationPreview(
   let colLunch = ZERO;
   let colDinner = ZERO;
   const roomsOut: PreviewRoomLine[] = totals.perRoom.map((r, i) => {
-    const roomSubtotal = r.perNightRoom.mul(r.nights);
+    // An apartment's room money is its rent; a room let with it carries none (2026-11-25).
+    const roomSubtotal = r.rent ? r.accommodationNet : r.perNightRoom.mul(r.nights);
     // Night-by-night when a night overrides the bed count (2026-08-19); `rate × count × nights` otherwise.
     const extraBedSubtotal = r.extraBedSubtotal;
     colRoom = colRoom.add(roomSubtotal);
@@ -516,6 +530,7 @@ export async function buildQuotationPreview(
       total: n2(r.total),
       isFoc: input.roomCompositions[i]?.isFoc === true,
       hasNightMealOverrides: r.perNightMealBreakdown.some((b) => b.overridden),
+      rent: r.rent,
     };
   });
 
@@ -558,6 +573,7 @@ export async function buildQuotationPreview(
       nightDates: ds ?? null,
       nightBreakdown: r.perNightMealBreakdown.map((b) => ({ date: b.date, meals: n2(b.meals), extraBeds: b.extraBeds })),
       roomLabel: roomLabels.get(r.roomId) ?? null,
+      rent: r.rent ?? null,
     });
   });
   // The system's rooms by their type, counted; a room given by number by its number (2026-10-30).

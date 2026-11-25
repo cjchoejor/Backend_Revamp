@@ -437,6 +437,22 @@ async function main() {
       const nights = Math.max(1, Math.round((a.endDate.getTime() - a.startDate.getTime()) / 86_400_000));
       const roomPart = split ? split.accommodation : sub;
       const auditPosts = charges.filter((l) => l.lineType === "ROOM_CHARGE" && l.nightAuditRecordId && l.roomId === a.roomId && l.chargeDate >= a.startDate! && l.chargeDate < a.endDate!);
+      // An apartment (2026-11-25): its rent is posted period by period, each on the period's first
+      // night, at the period's own figure — not a share every night.
+      const rent = frozenComp.get(a.roomId)?.rent ?? null;
+      if (rent) {
+        for (const p of auditPosts) {
+          const period = rent.periods.find((x) => x.from === ymd(p.chargeDate));
+          if (!period || !near(D(p.amount), D(period.net), 0.005)) {
+            add("WARN", "C2_RENT_VS_FROZEN", `${entry.id} ${a.id}`, `room ${roomNo} ${ymd(p.chargeDate)}: posted ${money(D(p.amount))} where the rent ${period ? `for the period is ${money(D(period.net))}` : "posts nothing"}`);
+          }
+        }
+        const roomLines = charges.filter((l) => l.lineType === "ROOM_CHARGE" && l.roomId === a.roomId);
+        if (sumMoney(roomLines.map((l) => l.amount)).gt(sub.add(0.05))) {
+          add("WARN", "C2_OVERPOSTED_ROOM", `${entry.id} ${a.id}`, `room ${roomNo}: Σ rent on the bill ${money(sumMoney(roomLines.map((l) => l.amount)))} exceeds frozenSubtotal ${money(sub)}`);
+        }
+        continue;
+      }
       for (const p of auditPosts) {
         const index = Math.round((p.chargeDate.getTime() - a.startDate.getTime()) / 86_400_000);
         const perNight = shareForNight(roomPart, nights, index);
@@ -457,6 +473,13 @@ async function main() {
       const start = entry.reservation.frozenCheckInDate;
       const end = effectiveCheckOutDate(entry) ?? entry.reservation.frozenCheckOutDate;
       const covered = new Set(charges.filter((l) => l.lineType === "ROOM_CHARGE" || l.lineType === "STAY").map((l) => ymd(l.chargeDate)));
+      // An apartment's rent line covers every night of its period (2026-11-25).
+      for (const [roomId, c] of frozenComp) {
+        for (const period of c.rent?.periods ?? []) {
+          if (!charges.some((l) => l.lineType === "ROOM_CHARGE" && l.roomId === roomId && ymd(l.chargeDate) === period.from)) continue;
+          for (let t = Date.parse(`${period.from}T00:00:00Z`); t < Date.parse(`${period.to}T00:00:00Z`); t += 86_400_000) covered.add(ymd(new Date(t)));
+        }
+      }
       const missing: string[] = [];
       for (let t = start.getTime(); t < end.getTime(); t += 86_400_000) {
         const day = ymd(new Date(t));

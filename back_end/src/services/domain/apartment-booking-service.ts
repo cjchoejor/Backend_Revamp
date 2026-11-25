@@ -14,7 +14,8 @@ import { Stage, type PrismaClient } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
-import { plansForStay, rentForStay, ymdOf, type ApartmentPlan } from "../../lib/apartment-rent.js";
+import { plansForStay, rentForStay, rentPeriods, ymdOf, type ApartmentPlan } from "../../lib/apartment-rent.js";
+import type { RoomRent } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 import { apartmentRateFigures } from "../admin/apartment-admin-service.js";
 import { queryAvailability, selectOption } from "./s1-availability-service.js";
@@ -265,4 +266,55 @@ export async function pickApartmentsForEntry(
     },
   } as never);
   return { apartments: labels, rooms: rooms.map((r) => r.roomNumber), numberOfRooms: roomIds.length, configurationId: configId };
+}
+
+/**
+ * Each room's rent for an apartment stay let monthly or weekly (2026-11-25) — what the quotation, the
+ * live preview and the papers price a room by in place of its nightly rate. The rent of an apartment
+ * sits on its first room; the other rooms of an apartment let together carry no rent of their own.
+ * Empty for any other stay, and for an apartment stay under a week (charged by the night).
+ * ⚠️ Money: the periods are the rent rule's (lib/apartment-rent.ts), on the package's rates WITHOUT
+ * service charge and GST.
+ */
+export async function rentForBookingRooms(
+  prisma: PrismaClient,
+  entry: { useType: string | null; apartmentPlan?: string | null; checkInDate: Date | null; checkOutDate: Date | null },
+  roomIds: string[],
+): Promise<Map<string, RoomRent>> {
+  const out = new Map<string, RoomRent>();
+  const plan = entry.apartmentPlan as ApartmentPlan | null | undefined;
+  if (String(entry.useType) !== "APARTMENT" || !plan || !entry.checkInDate || !entry.checkOutDate || !roomIds.length) return out;
+  const apartments = await apartmentsOfRooms(prisma, roomIds);
+  const packageIds = [...new Set([...apartments.values()].map((a) => a.packageId))];
+  const packages = await prisma.apartmentPackage.findMany({ where: { id: { in: packageIds } }, select: { id: true, weeklyRate: true, monthlyRate: true } });
+  const rateOf = new Map(packages.map((p) => [p.id, plan === "MONTHLY" ? p.monthlyRate : p.weeklyRate]));
+  for (const roomId of roomIds) {
+    const a = apartments.get(roomId);
+    if (!a) continue;
+    const lead = a.roomIds.find((id) => roomIds.includes(id)) ?? a.roomIds[0];
+    out.set(roomId, {
+      plan,
+      unitLabel: a.label,
+      packageName: a.packageName,
+      leadRoomId: lead,
+      roomNumbers: a.roomNumbers,
+      rate: (rateOf.get(a.packageId) ?? 0).toString(),
+      periods: roomId === lead ? rentPeriods(plan, entry.checkInDate, entry.checkOutDate, rateOf.get(a.packageId) ?? 0) : [],
+    });
+  }
+  return out;
+}
+
+/**
+ * An apartment let by the month or the week cannot be changed in house yet (2026-11-25): its rent
+ * is posted a period at a time, and re-quoting the stay over a period already posted would post it
+ * again. Refused in words before anything moves; before check-in a change re-prices freely.
+ */
+export async function refuseInHouseApartmentChange(prisma: PrismaClient, entryId: string, what: string) {
+  const e = await prisma.entry.findUnique({ where: { id: entryId }, select: { useType: true, apartmentPlan: true, currentStage: true } });
+  if (e && String(e.useType) === "APARTMENT" && e.apartmentPlan && e.currentStage === Stage.S7) {
+    throw new ValidationError(
+      `${what} is not possible yet on an apartment let ${e.apartmentPlan === "MONTHLY" ? "monthly" : "weekly"} once the guest is in — its rent is billed a period at a time. Leaving early is.`,
+    );
+  }
 }
