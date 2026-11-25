@@ -160,11 +160,27 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   // leaves, and the free room picked for it. Picking a room is a draft; Move our guest keeps it, and only
   // then is the house asked with it.
   const [ourMoves, setOurMoves] = useState<Record<string, string>>({});
+  // The rate for each move to another type, asked on Done (2026-11-25, operator: "the option to choose
+  // to charge with the same rate as before or new rate of the new room type for each room when clicking
+  // done"): KEEP the rate the guest has, or OWN — the new room's own rate. Until chosen, its own rate.
+  const [rateChoice, setRateChoice] = useState<Record<string, "KEEP" | "OWN">>({});
+  const [askRates, setAskRates] = useState(false);
   const moves = useMemo(
-    () => Object.entries(ourMoves).map(([fromRoomId, toRoomId]) => ({ fromRoomId, toRoomId })).sort((a, b) => a.fromRoomId.localeCompare(b.fromRoomId)),
-    [ourMoves],
+    () =>
+      Object.entries(ourMoves)
+        .map(([fromRoomId, toRoomId]) => ({ fromRoomId, toRoomId, ...(rateChoice[fromRoomId] === "KEEP" ? { keepRate: true } : {}) }))
+        .sort((a, b) => a.fromRoomId.localeCompare(b.fromRoomId)),
+    [ourMoves, rateChoice],
   );
   const movesKey = JSON.stringify(moves);
+  /** A move changed or taken back: its rate is asked again. */
+  const forgetRate = (fromRoomId: string) =>
+    setRateChoice((cur) => {
+      if (!(fromRoomId in cur)) return cur;
+      const next = { ...cur };
+      delete next[fromRoomId];
+      return next;
+    });
   const [swapLegs, setSwapLegs] = useState<RoomMoveLegInput[] | null>(null);
   // After a swap the house is asked again; the taken rooms wait meanwhile.
   const [rechecking, setRechecking] = useState(false);
@@ -185,6 +201,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   useEffect(() => {
     if (currentOut) setNewOut(addDays(currentOut, 1));
     setOurMoves({});
+    setRateChoice({});
     setChoice({});
     setCheckedOut(null);
   }, [currentOut]);
@@ -198,6 +215,13 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the moves are read by their contents
     [checkedOut, movesKey, ask.mode, ask.value, askOk, ratesOpen, tableComps],
   );
+  // The rates table describes the rooms it was opened with. When a move or a rate choice changes the
+  // rooms, its rows would name rooms no longer in the extension and the house would refuse them
+  // (2026-11-25, operator: a moment of the old answer, then "Room 201 is not one of them" and no way
+  // back) — so they are dropped, and the table opens again on the new rooms (keyed below).
+  useEffect(() => {
+    setTableComps([]);
+  }, [movesKey, checkedOut]);
   const [asked, setAsked] = useState(params);
   useEffect(() => {
     const t = setTimeout(() => setAsked(params), 400);
@@ -205,7 +229,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   }, [params]);
 
   const [kept, setKept] = useState<StayExtensionPreview | null>(null);
-  const preview = useQuery({
+  const preview = useQuery<StayExtensionPreview, Error>({
     queryKey: ["stay-extension-preview", entry.id, asked],
     enabled: !!session && !!asked.newOut && !!currentOut && nightsBetween(currentOut, asked.newOut) >= 1,
     placeholderData: (prev) => prev,
@@ -221,10 +245,14 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
       }),
   });
   const stale = checkedOut !== newOut;
-  const p = !stale && preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
+  const fresh = !stale && preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
+  const refused = preview.isError ? (preview.error instanceof ApiError ? preview.error.message : "The house could not be asked — try again") : null;
+  // Refused, the last answer for these dates stays, so the moves can still be changed or taken back.
+  const p = fresh ?? (!stale && refused && kept && ymd(kept.newCheckOut) === newOut ? kept : null);
   const checking = !stale && preview.isFetching && !p;
   const check = () => {
     setOurMoves({});
+    setRateChoice({});
     setChoice({});
     // Pressed again on the same date, the house is asked afresh.
     if (checkedOut === newOut) void preview.refetch();
@@ -270,7 +298,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const overlapOpen = !!p?.guestOverlap && !p.guestOverlap.acknowledged;
   const roomsOk = !!p && !p.blockedReason && !overlapOpen;
   const due = p?.figures.dueNow ?? null;
-  const ready = roomsOk && askOk && (due ?? 0) > 0 && !preview.isFetching;
+  const ready = roomsOk && askOk && (due ?? 0) > 0 && !preview.isFetching && !refused;
   const notReady = !p
     ? extra < 1
       ? "Pick a check-out after the current one"
@@ -300,13 +328,17 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   useEffect(() => {
     if (!roomsOk && at > 1) setAt(1);
   }, [roomsOk, at]);
-  const part1Ready = roomsOk && !preview.isFetching;
+  const part1Ready = roomsOk && !preview.isFetching && !refused;
+  const crossMoves = (p?.moves ?? []).filter((m) => m.crossType);
+  const gm = atLeast(session?.actorLevel, "L3");
+  const rateWord = (m: StayExtensionPreview["moves"][number]) =>
+    m.keepRate ? `keeps ${money(m.fromRate ?? 0, p?.currency)} a night` : `${m.toRate != null ? money(m.toRate, p?.currency) : "its own rate"} a night, its own rate`;
   const stillTaken = takenRooms.filter((r) => !ourMoves[r.roomId]).length;
   const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (stillTaken > 0 ? `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or move their booking` : p.blockedReason) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
   const roomsLine = !p
     ? ""
     : p.moves.length
-      ? p.moves.map((m) => `Room ${m.fromRoomNumber} → Room ${m.toRoomNumber} from ${fmtDay(p.currentCheckOut)}`).join(", ")
+      ? p.moves.map((m) => `Room ${m.fromRoomNumber} → Room ${m.toRoomNumber} from ${fmtDay(p.currentCheckOut)}${m.crossType ? ` (${rateWord(m)})` : ""}`).join(", ")
       : p.currentRooms.length === 1
         ? "the guest stays in the room"
         : "the guests stay in their rooms";
@@ -373,12 +405,20 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                 <p className="meta ext-hint">
                   {checkedOut ? "The dates changed — " : ""}Press <b>Check the rooms</b> to see whether the {plural(extra, "night")} from {fmtDay(currentOut)} {extra === 1 ? "is" : "are"} free.
                 </p>
-              ) : preview.isError && !p ? (
-                <p className="stop-ink sm" role="alert">{preview.error instanceof ApiError ? preview.error.message : "The house could not be asked — try again"}</p>
+              ) : refused && !p ? (
+                <p className="stop-ink sm" role="alert">{refused}</p>
               ) : !p ? (
                 <p className="meta">Checking the rooms…</p>
               ) : (
-                <RoomsAnswer p={p} />
+                <>
+                  {refused ? (
+                    <div className="notice ended" role="alert">
+                      <span className="ended-mark">!</span>
+                      <span>{refused}</span>
+                    </div>
+                  ) : null}
+                  <RoomsAnswer p={p} />
+                </>
               )}
 
               {p && takenRooms.length > 0 && rechecking ? (
@@ -395,6 +435,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                   choice={choice}
                   onChoice={(roomId, v) => {
                     setChoice((cur) => ({ ...cur, [roomId]: v }));
+                    if (v === "THEIRS") forgetRate(roomId);
                     // Moving their booking instead lets go of a move kept for our guest out of this room.
                     if (v === "THEIRS" && ourMoves[roomId]) {
                       setOurMoves((cur) => {
@@ -405,14 +446,15 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                     }
                   }}
                   ourMoves={ourMoves}
-                  onKeepOurs={(fromRoomId, toRoomId) =>
+                  onKeepOurs={(fromRoomId, toRoomId) => {
+                    forgetRate(fromRoomId);
                     setOurMoves((cur) => {
                       const next = { ...cur };
                       if (toRoomId) next[fromRoomId] = toRoomId;
                       else delete next[fromRoomId];
                       return next;
-                    })
-                  }
+                    });
+                  }}
                   onSwap={setSwapLegs}
                 />
               ) : null}
@@ -435,7 +477,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                   </div>
                 </div>
               ) : null}
-              <PartDone ready={part1Ready} why={part1Why} onDone={() => goTo(2)} />
+              <PartDone ready={part1Ready} why={part1Why} onDone={() => (crossMoves.length > 0 ? setAskRates(true) : goTo(2))} />
             </>
           ) : null}
         </div>
@@ -465,11 +507,12 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                 <Button kind="quiet" compact onClick={() => setRatesOpen((v) => !v)}>
                   {ratesOpen ? "Keep the usual rates" : "Change the rates for the extra nights"}
                 </Button>
-                <Help label="About the rates">The same room keeps the rate the guest has; another room type starts at its own rate. Change them here when the guest agreed another figure.</Help>
+                <Help label="About the rates">The same room keeps the rate the guest has. A room of another type keeps the guest&rsquo;s rate or takes its own, as chosen on Done. Change them here when the guest agreed another figure.</Help>
               </div>
               {ratesOpen && extensionRoomIds.length > 0 ? (
                 <Tool>
                   <RoomCompositionPlanner
+                    key={`${extensionRoomIds.join(",")}|${movesKey}`}
                     tableOnly
                     sealedRoomIds={extensionRoomIds}
                     entryCheckIn={entry.checkInDate ?? null}
@@ -558,12 +601,28 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
           setSwapLegs(null);
           setChoice({});
           setOurMoves({});
+          setRateChoice({});
           swapClosedAt.current = Date.now();
           setRechecking(true);
           // Every answer read before the swap is old now, the one about to be asked included.
           void qc.invalidateQueries({ queryKey: ["stay-extension-preview", entry.id] });
         }}
       />
+      {askRates && p && crossMoves.length > 0 ? (
+        <RateChoiceDialog
+          moves={crossMoves}
+          currency={p.currency}
+          initial={rateChoice}
+          gm={gm}
+          typeNameOf={(roomId) => p.candidates.find((c) => c.roomId === roomId)?.roomTypeName ?? p.currentRooms.find((c) => c.roomId === roomId)?.roomTypeName ?? null}
+          onClose={() => setAskRates(false)}
+          onDone={(picked) => {
+            setRateChoice(picked);
+            setAskRates(false);
+            goTo(2);
+          }}
+        />
+      ) : null}
       {confirmOpen && p ? (
         <DsDialog
           open
@@ -682,7 +741,7 @@ function RoomsAnswer({ p }: { p: StayExtensionPreview }) {
       )}
       {p.moves.length > 0 ? (
         <p className="ext-moves">
-          From {fmtDay(p.currentCheckOut)}: {p.moves.map((m) => `Room ${m.fromRoomNumber} → Room ${m.toRoomNumber}${m.crossType ? " (another type, at its own rate)" : " (same type, same rate)"}`).join(", ")}
+          From {fmtDay(p.currentCheckOut)}: {p.moves.map((m) => `Room ${m.fromRoomNumber} → Room ${m.toRoomNumber}${m.crossType ? ` (another type, ${m.keepRate ? `keeps ${money(m.fromRate ?? 0, p.currency)} a night` : "at its own rate — or keep the guest's rate, asked on Done"})` : " (same type, same rate)"}`).join(", ")}
         </p>
       ) : null}
       {p.currentRooms.length > 1 ? (
@@ -837,7 +896,7 @@ function TakenRooms({
                                 </optgroup>
                               ) : null}
                               {other.length ? (
-                                <optgroup label="Another type — at its own rate">
+                                <optgroup label="Another type — its rate is asked on Done">
                                   {other.map((c) => (
                                     <option key={c.roomId} value={c.roomId}>
                                       Room {c.roomNumber} · {c.roomTypeName}
@@ -856,7 +915,7 @@ function TakenRooms({
                             {to ? `Move our guest to Room ${to.roomNumber}` : "Move our guest to…"}
                           </Button>
                           <Help label="About moving our guest">
-                            Nothing moves now: the move is part of the extension. Once the stay is extended, our guest moves to this room on {fmtDay(p.currentCheckOut)}, the morning the stay would have ended. The same type keeps its rate; another type is charged at its own rate.
+                            Nothing moves now: the move is part of the extension. Once the stay is extended, our guest moves to this room on {fmtDay(p.currentCheckOut)}, the morning the stay would have ended. The same type keeps its rate; for another type you choose on Done whether it keeps the guest&rsquo;s rate or takes its own.
                           </Help>
                         </div>
                       )}
@@ -1383,5 +1442,112 @@ function EarlierExtensions({ rows }: { rows: StayExtensionRow[] }) {
         </tbody>
       </table>
     </StepCard>
+  );
+}
+
+/**
+ * The rate of each room our guest moves into that is another type (2026-11-25, operator): keep the
+ * rate the guest has, or the new room's own rate — every figure the server's, nothing chosen until the
+ * desk chooses. Keeping a rate under the new type's minimum is the GM's or an admin's.
+ */
+function RateChoiceDialog({
+  moves,
+  currency,
+  initial,
+  gm,
+  typeNameOf,
+  onClose,
+  onDone,
+}: {
+  moves: StayExtensionPreview["moves"];
+  currency: string | undefined;
+  initial: Record<string, "KEEP" | "OWN">;
+  gm: boolean;
+  typeNameOf: (roomId: string) => string | null;
+  onClose: () => void;
+  onDone: (picked: Record<string, "KEEP" | "OWN">) => void;
+}) {
+  const [picked, setPicked] = useState<Record<string, "KEEP" | "OWN">>(() => {
+    const out: Record<string, "KEEP" | "OWN"> = {};
+    for (const m of moves) if (initial[m.fromRoomId]) out[m.fromRoomId] = initial[m.fromRoomId]!;
+    return out;
+  });
+  const shutKeep = (m: StayExtensionPreview["moves"][number]) => m.fromRate == null || (m.keepFloor != null && !gm);
+  const missing = moves.find((m) => !picked[m.fromRoomId] || (picked[m.fromRoomId] === "KEEP" && shutKeep(m)));
+  return (
+    <DsDialog
+      open
+      closeX
+      onClose={onClose}
+      title={moves.length === 1 ? "The rate for the room that changes type" : "The rate for each room that changes type"}
+      footer={
+        <>
+          <span className="meta">{missing ? `Choose a rate for Room ${missing.toRoomNumber}` : "All chosen"}</span>
+          <Button
+            className={missing ? undefined : "go"}
+            state={missing ? "inert" : "default"}
+            title={missing ? `Choose a rate for Room ${missing.toRoomNumber}` : undefined}
+            onClick={() => onDone(picked)}
+          >
+            Go on
+          </Button>
+        </>
+      }
+    >
+      <p className="meta">Our guest moves into another room type. Keep the rate they have now, or charge the new room&rsquo;s own rate. A night, before service charge and GST.</p>
+      <div className="rate-choices">
+        {moves.map((m) => {
+          const toType = typeNameOf(m.toRoomId);
+          const fromType = typeNameOf(m.fromRoomId);
+          const keepShut = shutKeep(m);
+          return (
+            <div key={m.fromRoomId} className="rate-choice">
+              <div className="rc-head">
+                <b>Room {m.fromRoomNumber}</b>
+                {fromType ? <span className="meta"> {fromType}</span> : null}
+                <span aria-hidden> → </span>
+                <b>Room {m.toRoomNumber}</b>
+                {toType ? <span className="meta"> {toType}</span> : null}
+              </div>
+              <div className="rc-options" role="radiogroup" aria-label={`Rate for Room ${m.toRoomNumber}`}>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={picked[m.fromRoomId] === "KEEP"}
+                  className={`rc-option${picked[m.fromRoomId] === "KEEP" ? " on" : ""}`}
+                  disabled={keepShut}
+                  onClick={() => setPicked((cur) => ({ ...cur, [m.fromRoomId]: "KEEP" }))}
+                >
+                  <span className="rc-dot" aria-hidden />
+                  <span className="rc-words">
+                    <b>Keep {m.fromRate != null ? money(m.fromRate, currency) : "their rate"}</b>
+                    <span>the rate the guest has now</span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={picked[m.fromRoomId] === "OWN"}
+                  className={`rc-option${picked[m.fromRoomId] === "OWN" ? " on" : ""}`}
+                  onClick={() => setPicked((cur) => ({ ...cur, [m.fromRoomId]: "OWN" }))}
+                >
+                  <span className="rc-dot" aria-hidden />
+                  <span className="rc-words">
+                    <b>{m.toRate != null ? money(m.toRate, currency) : "Its own rate"}</b>
+                    <span>{toType ? `the ${toType}'s own rate` : "the room's own rate"}</span>
+                  </span>
+                </button>
+              </div>
+              {m.keepFloor != null ? (
+                <p className={keepShut ? "stop-ink sm" : "warn-ink sm"} role={keepShut ? "alert" : undefined}>
+                  Keeping {money(m.fromRate ?? 0, currency)} is below the {toType ?? "room type"}&rsquo;s minimum of {money(m.keepFloor, currency)}
+                  {keepShut ? " — only the GM or an admin may keep it." : " — kept on your authority."}
+                </p>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </DsDialog>
   );
 }

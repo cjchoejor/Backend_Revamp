@@ -154,7 +154,19 @@ export type StayExtensionPreview = {
   currentRooms: Array<RoomStanding & { extendableInPlace: boolean }>;
   candidates: RoomStanding[];
   plan: Array<{ date: string; roomId: string; roomNumber: string | null }>;
-  moves: Array<{ fromRoomId: string; fromRoomNumber: string | null; toRoomId: string; toRoomNumber: string | null; crossType: boolean }>;
+  moves: Array<{
+    fromRoomId: string;
+    fromRoomNumber: string | null;
+    toRoomId: string;
+    toRoomNumber: string | null;
+    crossType: boolean;
+    /** Another type: keeps the guest's rate (fromRate, a night) or takes its own (toRate). */
+    keepRate?: boolean;
+    fromRate?: number | null;
+    toRate?: number | null;
+    /** The new type's minimum when keeping goes under it with no price agreed — the GM's or an admin's. */
+    keepFloor?: number | null;
+  }>;
   compositions: RoomCompositionInput[];
   pricing: {
     priorStayTotal: number | null;
@@ -200,7 +212,7 @@ export type StayExtensionInput = {
   /** Which current room `perNight` replaces (multi-room bookings) — the desk always names it. */
   replaceRoomId?: string;
   /** Several of our guest's rooms moving on the old check-out day, each to its own free room (2026-11-25). */
-  moves?: Array<{ fromRoomId: string; toRoomId: string }>;
+  moves?: Array<{ fromRoomId: string; toRoomId: string; keepRate?: boolean }>;
   roomCompositions?: RoomCompositionInput[];
   requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
   askMode?: "PERCENT" | "AMOUNT";

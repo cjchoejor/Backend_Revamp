@@ -2984,3 +2984,24 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .etr-mover-pick { color: var(--ink-2); font-style: italic; }
 .ds .etr-mover-stays { display: inline-flex; align-items: center; gap: 4px; margin-top: 2px; font-size: var(--t-sm); font-weight: 600; color: var(--success, #1E7A4F); }
 @media (prefers-reduced-motion: reduce) { .ds .etr-mover { animation: none; } }
+
+/* Extend the stay: the rate of each room our guest moves into that is another type (2026-11-25) —
+   two choices a room, drawn as the desk's choice buttons with the figure large. */
+.ds .rate-choices { display: grid; gap: var(--s3); margin-top: var(--s3); }
+.ds .rate-choice { border: 1px solid var(--line-2); border-radius: 6px; padding: var(--s3); background: var(--surface); }
+.ds .rate-choice .rc-head { font-size: var(--t-base); color: var(--ink); margin-bottom: var(--s2); }
+.ds .rate-choice .rc-options { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s2); }
+.ds .rate-choice .rc-option { display: flex; align-items: flex-start; gap: 10px; text-align: left; padding: 8px 12px; border: 1px solid var(--ink-3); border-bottom-width: 2px; border-radius: var(--r-control); background: var(--surface); color: var(--ink); cursor: pointer; font: inherit; transition: background-color .12s ease, border-color .12s ease; }
+.ds .rate-choice .rc-option:not(:disabled):not(.on):hover { background: var(--surface-3); border-color: var(--ink); }
+.ds .rate-choice .rc-option:not(:disabled):active { transform: translateY(1px); }
+.ds .rate-choice .rc-option.on { border-color: var(--accent); background: var(--accent-soft); box-shadow: inset 0 -3px 0 var(--accent); }
+.ds .rate-choice .rc-option:disabled { border-style: dashed; color: var(--ink-3); cursor: not-allowed; }
+.ds .rate-choice .rc-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ds .rate-choice .rc-dot { flex: none; width: 16px; height: 16px; margin-top: 3px; box-sizing: border-box; border-radius: 50%; border: 2px solid var(--ink-3); background: var(--surface); }
+.ds .rate-choice .rc-option.on .rc-dot { border-color: var(--accent); background: var(--accent); box-shadow: inset 0 0 0 3px var(--surface); }
+.ds .rate-choice .rc-words { display: grid; gap: 2px; }
+.ds .rate-choice .rc-words b { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.ds .rate-choice .rc-words span { font-size: var(--t-sm); color: var(--ink-3); }
+.ds .rate-choice .rc-option.on .rc-words span { color: var(--ink-2); }
+.ds .rate-choice p { margin-top: var(--s2); }
+@media (max-width: 520px) { .ds .rate-choice .rc-options { grid-template-columns: 1fr; } }
