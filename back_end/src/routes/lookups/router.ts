@@ -22,7 +22,7 @@ import { loadChildPolicyBundle } from "../../services/domain/child-policy-servic
 import { computeChargeableOccupants, computeAllowedRoomCounts, loadHotelInventorySnapshot, suggestRoomCount } from "../../services/domain/capacity-validation-service.js";
 import { listPackagesForParty } from "../../lib/rate-package-resolution.js";
 import { listApartmentPackages } from "../../services/admin/apartment-admin-service.js";
-import { plansForStay } from "../../lib/apartment-rent.js";
+import { plansForStay, rentForStay } from "../../lib/apartment-rent.js";
 const YMD_APT = /^\d{4}-\d{2}-\d{2}$/;
 import { addUtcDays, hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
@@ -409,9 +409,28 @@ lookupsRouter.get("/lookups/apartment-plans", L1, async (req, res, next) => {
  * The hotel's apartments offered by the week or the month (2026-11-25), with their rates as the bill
  * reads them. L1: the desk shows them while a stay is taken.
  */
-lookupsRouter.get("/lookups/apartment-packages", L1, async (_req, res, next) => {
+lookupsRouter.get("/lookups/apartment-packages", L1, async (req, res, next) => {
   try {
-    res.set("Cache-Control", "no-store").json(await listApartmentPackages(prisma, { activeOnly: true }));
+    const list = await listApartmentPackages(prisma, { activeOnly: true });
+    // With dates (the new inquiry, before there is a booking): what each package comes to for them.
+    const ci = typeof req.query.checkIn === "string" && YMD_APT.test(req.query.checkIn) ? req.query.checkIn : null;
+    const co = typeof req.query.checkOut === "string" && YMD_APT.test(req.query.checkOut) ? req.query.checkOut : null;
+    const plans = ci && co && co > ci ? plansForStay(ci, co) : null;
+    const rule = { serviceChargeRate: list.serviceChargeRate, gstRate: list.gstRate };
+    res.set("Cache-Control", "no-store").json({
+      ...list,
+      stay: plans ? { checkInDate: ci, checkOutDate: co, nights: plans.nights } : null,
+      plans,
+      packages: list.packages.map((p) => ({
+        ...p,
+        forStay: plans
+          ? {
+              MONTHLY: plans.monthly ? rentForStay({ plan: "MONTHLY", checkIn: ci!, checkOut: co!, weeklyRate: p.weekly.rate, monthlyRate: p.monthly.rate, rule }) : null,
+              WEEKLY: plans.weekly ? rentForStay({ plan: "WEEKLY", checkIn: ci!, checkOut: co!, weeklyRate: p.weekly.rate, monthlyRate: p.monthly.rate, rule }) : null,
+            }
+          : null,
+      })),
+    });
   } catch (e) { next(e); }
 });
 
