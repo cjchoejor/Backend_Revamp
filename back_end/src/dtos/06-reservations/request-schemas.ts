@@ -208,7 +208,7 @@ export type StayExtensionPreviewRequestDto = z.infer<typeof stayExtensionPreview
 export const stayExtensionRequestSchema = z
   .object({
     ...stayExtensionShape,
-    reason: z.string().trim().min(1, "A reason for the extension is required"),
+    reason: z.string().trim().max(500).optional(),
     askMode: z.enum(["PERCENT", "AMOUNT"]),
     askValue: z.coerce.number().refine((n) => Number.isFinite(n) && n > 0, "askValue must be positive"),
     note: z.string().trim().max(500).optional(),

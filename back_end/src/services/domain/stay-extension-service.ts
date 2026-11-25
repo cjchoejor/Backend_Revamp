@@ -389,7 +389,8 @@ export async function requestStayExtension(
     replaceRoomId?: string | null;
     roomCompositions?: RoomCompositionServiceInput[];
     requestedDiscount?: { discountPercent?: number; discountAmount?: number; discountBasis: string } | null;
-    reason: string;
+    /** Optional since 2026-11-25 (the desk asks no reason for a change to a booking, as for a room change). */
+    reason?: string | null;
     ask: InterimAsk;
     note?: string | null;
     /** When the extension's payment is expected (ISO). Omitted = before the held nights lapse (policy). */
@@ -397,8 +398,7 @@ export async function requestStayExtension(
   },
 ) {
   requireFom(actor, "extend a stay");
-  const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("A reason for the extension is required");
+  const reason = input.reason?.trim() || "";
   const open = await prisma.stayExtensionRequest.findFirst({
     where: { entryId, state: { in: ["REQUESTED", "BILLED", "PAID"] } },
     select: { id: true, state: true, newCheckOutDate: true },
@@ -447,7 +447,7 @@ export async function requestStayExtension(
       kind: "EXTENSION",
       ask: input.ask,
       figures: preview.figures,
-      note: input.note ?? `Stay extension to ${preview.newCheckOut}: ${reason}`,
+      note: input.note ?? `Stay extension to ${preview.newCheckOut}${reason ? `: ${reason}` : ""}`,
       stayExtensionRequestId: request.id,
       dueBy,
     });
@@ -649,7 +649,7 @@ export async function commitStayExtension(
     entryId: req.entryId,
     fromRoomId,
     ...(toRoomId ? { toRoomId } : {}),
-    reason: reason?.trim() || req.reason,
+    reason: reason?.trim() || req.reason || undefined,
     roomCompositions: Array.isArray(req.roomCompositions) ? (req.roomCompositions as unknown as RoomCompositionServiceInput[]) : undefined,
     ...(req.requestedDiscount !== null && req.requestedDiscount !== undefined
       ? { requestedDiscount: req.requestedDiscount as { discountPercent?: number; discountAmount?: number; discountBasis: string } }
