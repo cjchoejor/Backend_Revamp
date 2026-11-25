@@ -390,9 +390,21 @@ export type PaymentStatusSummary = {
   /** True when an extension exists but its clock ran out — it no longer satisfies the condition. */
   creditExtensionExpired?: boolean;
   /** Where requiredAmount came from: set for this booking, the party's own percentage, or nothing asked. */
-  requirementSource?: "OPERATOR" | "PARTY" | "NONE";
-  /** { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name. */
-  requirementBasis?: { mode?: string; percent?: number; baseTotal?: number; quotationId?: string; source?: string; partyName?: string } | null;
+  requirementSource?: "OPERATOR" | "PARTY" | "RENT" | "NONE";
+  /**
+   * { mode: "AMOUNT" } or { mode: "PERCENT", percent, baseTotal, quotationId }; from a party, also its name;
+   * an apartment's first period of rent (source APARTMENT_RENT, 2026-11-25) carries its plan and the period in words.
+   */
+  requirementBasis?: {
+    mode?: string;
+    percent?: number;
+    baseTotal?: number;
+    quotationId?: string;
+    source?: string;
+    partyName?: string;
+    plan?: "MONTHLY" | "WEEKLY";
+    periodWords?: string;
+  } | null;
   /**
    * The advance-payment window (2026-08-01): due between proforma dispatch (`opensAt`) and the
    * check-in date (`deadline`). `active` = clock running; `overdue` = check-in passed unpaid.

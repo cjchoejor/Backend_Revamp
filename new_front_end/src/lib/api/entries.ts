@@ -513,7 +513,7 @@ export type BookingJourneySummary = {
       shortfall: number | null;
       creditExtensionActive: boolean;
       ceilingAmount: number | null;
-      requirementSource: "OPERATOR" | "PARTY" | "NONE" | null;
+      requirementSource: "OPERATOR" | "PARTY" | "RENT" | "NONE" | null;
       requirementBasis: unknown | null;
       creditExtensionExpiresAt: string | null;
       creditExtensionExpired: boolean;

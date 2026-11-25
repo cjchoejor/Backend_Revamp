@@ -735,6 +735,17 @@ export function InterimPaymentBlock({
   });
 
   const suggested = open?.state === "SUGGESTED";
+  // A rent prompt (an apartment let by the month or the week, 2026-11-25) arrives with its figure —
+  // the rent through the new period, the server's — and its words; the form starts on them.
+  const rentPrompt = suggested && open?.askMode === "AMOUNT" && open.askValue != null && /^The rent for /.test(open.note ?? "") ? open : null;
+  const seededFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!rentPrompt || seededFor.current === rentPrompt.id) return;
+    seededFor.current = rentPrompt.id;
+    setMode("AMOUNT");
+    setValue(String(Number(rentPrompt.askValue)));
+    setNote(rentPrompt.note ?? "");
+  }, [rentPrompt]);
   const showAskForm = !open || suggested;
   const inHouse = entry.currentStage === "S7" && entry.folio?.state === "LIVE";
 
@@ -774,7 +785,15 @@ export function InterimPaymentBlock({
           ]}
         />
       )}
-      {suggested && open && (
+      {suggested && open && rentPrompt && (
+        <div className="fact" role="status" style={{ padding: "7px 11px", fontSize: 13, width: "100%", marginTop: 8, border: "1px solid var(--warn)", background: "var(--warn-t)" }}>
+          <span>
+            <b>Rent due</b> — {rentPrompt.note?.replace(/^The rent for /, "for ")}. The rent through this period comes to{" "}
+            <b>{money(Number(rentPrompt.askValue), currency)}</b>; what is already paid comes off when the bill is made.
+          </span>
+        </div>
+      )}
+      {suggested && open && !rentPrompt && (
         <div className="fact" style={{ padding: "7px 11px", fontSize: 12, width: "100%", marginTop: 8, border: "1px solid var(--warn)", background: "var(--warn-t)" }}>
           <b>Interim payment due</b> — raised by the night audit after {plural(open.nightsSleptAtPrompt ?? 2, "night")}. Put a figure on it below to generate the bill.
         </div>
