@@ -2967,6 +2967,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* Who moves (2026-11-25, operator: "show prominently which guest is being moved"): the name large, the
    edge in the mover's colour — blue for our guest, amber for another guest's booking — and who stays in green. */
 .ds .etr-theirs { display: grid; gap: 8px; }
+/* Our guest's move kept (2026-11-25): the card turns green-edged, the move said once, with Change. */
+.ds .ext-taken-room.decided { border-color: var(--line-2); border-left-color: var(--success, #1E7A4F); }
+.ds .ext-taken-room.decided .etr-taken { color: var(--ink-2); font-weight: 600; }
+.ds .etr-kept { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--success-line, #A9D4BC); border-radius: 6px; background: var(--success-soft, #E3F2EA); color: var(--success, #1E7A4F); font-size: 14px; }
+.ds .etr-kept b { color: var(--success, #1E7A4F); }
+.ds .etr-blocked { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 8px 12px; border: 1px solid var(--warning-line); border-radius: 6px; background: var(--warning-soft); color: var(--ink); font-size: 14px; }
 .ds .etr-mover { display: grid; gap: 2px; padding: 10px 14px; border: 1px solid var(--line-2); border-left: 5px solid var(--accent); border-radius: 6px; background: var(--accent-soft, #E7EEF8); animation: house-short-in .6s ease-out 1; }
 .ds .etr-mover.theirs { border-left-color: var(--warning); background: var(--warning-soft); }
 .ds .etr-mover-tag { font-size: 11.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; color: var(--accent-ink, var(--accent)); }

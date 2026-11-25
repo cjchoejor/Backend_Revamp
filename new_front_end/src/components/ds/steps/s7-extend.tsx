@@ -151,12 +151,16 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const invalidate = useInvalidate(entry.id, onChanged);
   const currentOut = checkOut;
   const [newOut, setNewOut] = useState(currentOut ? addDays(currentOut, 1) : "");
-  const [moveTo, setMoveTo] = useState("");
   // What happens to each room another booking holds on the extra nights (2026-11-25, operator: "we need
   // the swap feature here as well"): our guest moves out of it (one room per extension), or their booking
   // is given another room so our guest keeps it.
   const [choice, setChoice] = useState<Record<string, TakenChoice>>({});
-  const moveRoom = Object.entries(choice).find(([, v]) => v === "OURS")?.[0] ?? "";
+  // The move kept for our guest (2026-11-25, operator: "we need a button to move our guest field"): picking
+  // a room is a draft; Move our guest keeps it, and only then is the house asked with it. One room per
+  // extension (the server moves one), so a second room says which room already moves rather than undoing it.
+  const [ourMove, setOurMove] = useState<{ fromRoomId: string; toRoomId: string } | null>(null);
+  const moveRoom = ourMove?.fromRoomId ?? "";
+  const moveTo = ourMove?.toRoomId ?? "";
   const [swapLegs, setSwapLegs] = useState<RoomMoveLegInput[] | null>(null);
   // After a swap the house is asked again; the taken rooms wait meanwhile.
   const [rechecking, setRechecking] = useState(false);
@@ -176,7 +180,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   // After an extension the check-out moves on; the new date starts again a night after it.
   useEffect(() => {
     if (currentOut) setNewOut(addDays(currentOut, 1));
-    setMoveTo("");
+    setOurMove(null);
     setChoice({});
     setCheckedOut(null);
   }, [currentOut]);
@@ -186,7 +190,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
 
   // What is asked of the house is debounced, so typing a figure asks once.
   const params = useMemo(
-    () => ({ newOut: checkedOut ?? "", moveRoom, moveTo: moveRoom ? moveTo : "", askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
+    () => ({ newOut: checkedOut ?? "", moveRoom, moveTo, askMode: ask.mode, askValue: askOk ? ask.value : undefined, comps: ratesOpen ? tableComps : [] }),
     [checkedOut, moveRoom, moveTo, ask.mode, ask.value, askOk, ratesOpen, tableComps],
   );
   const [asked, setAsked] = useState(params);
@@ -206,8 +210,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
       previewStayExtension(session!, entry.id, {
         newCheckOutDate: asked.newOut,
         perNight: asked.moveTo && kept ? kept.extraNights.map((date) => ({ date, roomId: asked.moveTo })) : undefined,
-        // Named even before a room is picked, so "same type" is judged against the room our guest leaves.
-        replaceRoomId: asked.moveRoom || undefined,
+        replaceRoomId: asked.moveTo ? asked.moveRoom || undefined : undefined,
         roomCompositions: asked.comps.length ? asked.comps : undefined,
         askMode: asked.askMode,
         askValue: asked.askValue,
@@ -217,7 +220,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   const p = !stale && preview.data && ymd(preview.data.newCheckOut) === newOut ? preview.data : null;
   const checking = !stale && preview.isFetching && !p;
   const check = () => {
-    setMoveTo("");
+    setOurMove(null);
     setChoice({});
     // Pressed again on the same date, the house is asked afresh.
     if (checkedOut === newOut) void preview.refetch();
@@ -261,9 +264,6 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
   });
 
   const takenRooms = p?.takenRooms ?? [];
-  const alternatives = useMemo(() => (p ? p.candidates.filter((c) => c.selectable && !p.currentRooms.some((r) => r.roomId === c.roomId)) : []), [p]);
-  const sameType = alternatives.filter((c) => c.sameType);
-  const otherType = alternatives.filter((c) => !c.sameType);
   const overlapOpen = !!p?.guestOverlap && !p.guestOverlap.acknowledged;
   const roomsOk = !!p && !p.blockedReason && !overlapOpen;
   const due = p?.figures.dueNow ?? null;
@@ -298,8 +298,8 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
     if (!roomsOk && at > 1) setAt(1);
   }, [roomsOk, at]);
   const part1Ready = roomsOk && !preview.isFetching;
-  const stillTaken = takenRooms.filter((r) => !(choice[r.roomId] === "OURS" && moveTo)).length;
-  const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (moveRoom && !moveTo ? "Pick the room our guest moves to" : `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or move their booking`) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
+  const stillTaken = takenRooms.filter((r) => ourMove?.fromRoomId !== r.roomId).length;
+  const part1Why = extra < 1 ? "Pick a check-out after the current one" : stale ? "Check the rooms first" : !p ? (preview.isError ? "The house could not be asked" : "Asking the house…") : p.blockedReason ? (takenRooms.length ? (stillTaken > 0 ? `Say what happens to ${stillTaken === 1 ? "the taken room" : `the ${stillTaken} taken rooms`} — move our guest, or move their booking` : p.blockedReason) : "A room is not free") : overlapOpen ? "Say whether both bookings are meant" : preview.isFetching ? "Asking the house…" : null;
   const roomsLine = !p
     ? ""
     : p.moves.length
@@ -336,10 +336,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                     className="input"
                     value={newOut}
                     min={currentOut ? addDays(currentOut, 1) : undefined}
-                    onChange={(e) => {
-                      setNewOut(e.target.value);
-                      setMoveTo("");
-                    }}
+                    onChange={(e) => setNewOut(e.target.value)}
                   />
                 </div>
                 <div className="field">
@@ -394,21 +391,12 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
                   rooms={takenRooms}
                   choice={choice}
                   onChoice={(roomId, v) => {
-                    setChoice((cur) => {
-                      const next: Record<string, TakenChoice> = {};
-                      // Our guest moves out of one room per extension: choosing it for another room
-                      // hands that room back to be decided.
-                      for (const [k, w] of Object.entries(cur)) if (!(v === "OURS" && w === "OURS")) next[k] = w;
-                      next[roomId] = v;
-                      if (v === "OURS" && cur[roomId] !== "OURS") setMoveTo("");
-                      if (v === "THEIRS" && cur[roomId] === "OURS") setMoveTo("");
-                      return next;
-                    });
+                    setChoice((cur) => ({ ...cur, [roomId]: v }));
+                    // Moving their booking instead lets go of a move kept for our guest out of this room.
+                    if (v === "THEIRS" && ourMove?.fromRoomId === roomId) setOurMove(null);
                   }}
-                  moveTo={moveTo}
-                  setMoveTo={setMoveTo}
-                  sameType={sameType}
-                  otherType={otherType}
+                  ourMove={ourMove}
+                  onKeepOurs={(fromRoomId, toRoomId) => setOurMove(toRoomId ? { fromRoomId, toRoomId } : null)}
                   onSwap={setSwapLegs}
                 />
               ) : null}
@@ -553,7 +541,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
           // Whether it ran or not, ask the house again: the room may be free for our guest now.
           setSwapLegs(null);
           setChoice({});
-          setMoveTo("");
+          setOurMove(null);
           swapClosedAt.current = Date.now();
           setRechecking(true);
           // Every answer read before the swap is old now, the one about to be asked included.
@@ -733,10 +721,8 @@ function TakenRooms({
   rooms,
   choice,
   onChoice,
-  moveTo,
-  setMoveTo,
-  sameType,
-  otherType,
+  ourMove,
+  onKeepOurs,
   onSwap,
 }: {
   busy?: boolean;
@@ -745,13 +731,18 @@ function TakenRooms({
   rooms: StayExtensionTakenRoom[];
   choice: Record<string, TakenChoice>;
   onChoice: (roomId: string, v: TakenChoice) => void;
-  moveTo: string;
-  setMoveTo: (v: string) => void;
-  sameType: FreeRoom[];
-  otherType: FreeRoom[];
+  /** The move kept for our guest, if any — one room per extension. */
+  ourMove: { fromRoomId: string; toRoomId: string } | null;
+  /** Keep our guest's move out of a room (or, with null, let it go). */
+  onKeepOurs: (fromRoomId: string, toRoomId: string | null) => void;
   onSwap: (legs: RoomMoveLegInput[]) => void;
 }) {
   const [swapTo, setSwapTo] = useState<Record<string, string>>({});
+  /** The room picked for our guest on each card, before Move our guest keeps it. */
+  const [oursTo, setOursTo] = useState<Record<string, string>>({});
+  // Free for our guest on the extra nights: none of the guest's own rooms. "Same type" is judged against
+  // the room the guest leaves, the rule the server prices the move by (another type at its own rate).
+  const free: FreeRoom[] = p.candidates.filter((c) => c.selectable && !p.currentRooms.some((x) => x.roomId === c.roomId));
   const nightsWords = (nights: string[]) =>
     nights.length === 0 ? "" : nights.length === 1 ? fmtDay(nights[0]!) : `${fmtDay(nights[0]!)} – ${fmtDay(nights[nights.length - 1]!)}`;
   const stepWord = (stage: string) => STEP_NAMES[Number(stage.replace(/\D/g, "")) - 1] ?? stage;
@@ -765,7 +756,7 @@ function TakenRooms({
       {rooms.map((r) => {
         const v = choice[r.roomId];
         return (
-          <div key={r.roomId} className={`ext-taken-room${v ? " chosen" : ""}`}>
+          <div key={r.roomId} className={`ext-taken-room${v ? " chosen" : ""}${ourMove?.fromRoomId === r.roomId ? " decided" : ""}`}>
             <div className="etr-head">
               <b>Room {r.roomNumber}</b>
               <span className="meta">{r.roomTypeName}</span>
@@ -783,43 +774,92 @@ function TakenRooms({
               </div>
             ))}
             <Choice options={TAKEN_CHOICES} value={v ?? null} onChange={(w) => onChoice(r.roomId, w)} />
-            {v === "OURS" ? (
-              <Mover
-                tone="ours"
-                name={ourGuest}
-                who="our guest, in house"
-                what={`moves out of Room ${r.roomNumber} on ${fmtDay(p.currentCheckOut)}, and sleeps ${nightsWords(p.extraNights)} in`}
-                to={[...sameType, ...otherType].find((c) => c.roomId === moveTo) ?? null}
-                stays={r.heldBy.map((h) => `${h.guestName ?? h.entryId} keeps Room ${r.roomNumber} from ${fmtDay(h.nightsInRoom[0] ?? r.nights[0] ?? "")}, as booked`)}
-              />
-            ) : null}
-            {v === "OURS" ? (
-              <div className="field etr-field">
-                <label>Our guest moves from Room {r.roomNumber} to, from {fmtDay(p.currentCheckOut)}</label>
-                <select className="input" value={moveTo} onChange={(e) => setMoveTo(e.target.value)}>
-                  <option value="">Pick a free room…</option>
-                  {sameType.length ? (
-                    <optgroup label="Same type — keeps its rate">
-                      {sameType.map((c) => (
-                        <option key={c.roomId} value={c.roomId}>
-                          Room {c.roomNumber} · {c.roomTypeName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
-                  {otherType.length ? (
-                    <optgroup label="Another type — at its own rate">
-                      {otherType.map((c) => (
-                        <option key={c.roomId} value={c.roomId}>
-                          Room {c.roomNumber} · {c.roomTypeName}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null}
-                </select>
-                {sameType.length + otherType.length === 0 ? <p className="stop-ink sm">No room is free for those nights. Move their booking instead, or try another check-out.</p> : null}
-              </div>
-            ) : null}
+            {v === "OURS"
+              ? (() => {
+                  const kept = ourMove?.fromRoomId === r.roomId;
+                  const elsewhere = ourMove && !kept ? rooms.find((x) => x.roomId === ourMove.fromRoomId) ?? null : null;
+                  if (elsewhere) {
+                    return (
+                      <div className="etr-blocked" role="alert">
+                        <span>
+                          <b>Our guest already moves out of Room {elsewhere.roomNumber}.</b> One room can move per extension — move their booking instead, or undo that move first.
+                        </span>
+                        <Button kind="secondary" compact onClick={() => onKeepOurs(elsewhere.roomId, null)}>
+                          Undo the move out of Room {elsewhere.roomNumber}
+                        </Button>
+                      </div>
+                    );
+                  }
+                  const typeId = p.currentRooms.find((x) => x.roomId === r.roomId)?.roomTypeId ?? null;
+                  const same = free.filter((c) => c.roomTypeId === typeId);
+                  const other = free.filter((c) => c.roomTypeId !== typeId);
+                  const draft = kept ? ourMove!.toRoomId : (oursTo[r.roomId] ?? "");
+                  const to = free.find((c) => c.roomId === draft) ?? null;
+                  return (
+                    <>
+                      <Mover
+                        tone="ours"
+                        name={ourGuest}
+                        who="our guest, in house"
+                        what={`moves out of Room ${r.roomNumber} on ${fmtDay(p.currentCheckOut)}, and sleeps ${nightsWords(p.extraNights)} in`}
+                        to={to}
+                        stays={r.heldBy.map((h) => `${h.guestName ?? h.entryId} keeps Room ${r.roomNumber} from ${fmtDay(h.nightsInRoom[0] ?? r.nights[0] ?? "")}, as booked`)}
+                      />
+                      {kept ? (
+                        <div className="etr-kept" role="status">
+                          <span>
+                            <Icon name="check" /> <b>Kept.</b> Our guest moves to Room {to?.roomNumber ?? "—"} on {fmtDay(p.currentCheckOut)}, once the stay is extended. Nothing moves before then.
+                          </span>
+                          <Button kind="secondary" compact onClick={() => onKeepOurs(r.roomId, null)}>
+                            Change
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="etr-swap">
+                          <div className="field etr-field">
+                            <label>
+                              Our guest moves from Room {r.roomNumber} to, from {fmtDay(p.currentCheckOut)}
+                            </label>
+                            <select className="input" value={draft} onChange={(e) => setOursTo((cur) => ({ ...cur, [r.roomId]: e.target.value }))}>
+                              <option value="">Pick a free room…</option>
+                              {same.length ? (
+                                <optgroup label="Same type — keeps its rate">
+                                  {same.map((c) => (
+                                    <option key={c.roomId} value={c.roomId}>
+                                      Room {c.roomNumber} · {c.roomTypeName}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ) : null}
+                              {other.length ? (
+                                <optgroup label="Another type — at its own rate">
+                                  {other.map((c) => (
+                                    <option key={c.roomId} value={c.roomId}>
+                                      Room {c.roomNumber} · {c.roomTypeName}
+                                    </option>
+                                  ))}
+                                </optgroup>
+                              ) : null}
+                            </select>
+                          </div>
+                          <Button
+                            className={draft && !busy ? "go" : undefined}
+                            state={draft && !busy ? "default" : "inert"}
+                            title={draft ? undefined : "Pick a room for our guest first"}
+                            onClick={() => onKeepOurs(r.roomId, draft)}
+                          >
+                            {to ? `Move our guest to Room ${to.roomNumber}` : "Move our guest to…"}
+                          </Button>
+                          <Help label="About moving our guest">
+                            Nothing moves now: the move is part of the extension. Once the stay is extended, our guest moves to this room on {fmtDay(p.currentCheckOut)}, the morning the stay would have ended. The same type keeps its rate; another type is charged at its own rate.
+                          </Help>
+                        </div>
+                      )}
+                      {free.length === 0 ? <p className="stop-ink sm">No room is free for those nights. Move their booking instead, or try another check-out.</p> : null}
+                    </>
+                  );
+                })()
+              : null}
             {v === "THEIRS"
               ? r.heldBy.map((h) => {
                   const key = `${r.roomId}|${h.entryId}`;
