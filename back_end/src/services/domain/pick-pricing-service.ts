@@ -72,6 +72,22 @@ export type PickPricing = {
   totals: { roomNights: number; net: Money; serviceCharge: Money; gst: Money; total: Money };
   /** Types with no rate on file — the totals leave their nights out and say so. */
   unpricedTypes: Array<{ roomTypeId: string; name: string }>;
+  /**
+   * An apartment let by the month or the week (2026-11-25): each apartment picked, priced by its rent —
+   * a line per period, each taxed as a line — and then `totals` are the rent's. Rooms of the booking
+   * that are not an apartment are still priced by the night in `nights` and `byType`. Null otherwise.
+   */
+  rent: Array<{
+    unitLabel: string;
+    packageName: string;
+    plan: "MONTHLY" | "WEEKLY";
+    roomNumbers: string[];
+    periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; words: string; net: Money; serviceCharge: Money; gst: Money; total: Money }>;
+    net: Money;
+    serviceCharge: Money;
+    gst: Money;
+    total: Money;
+  }> | null;
 };
 
 const DAY_MS = 86_400_000;
@@ -87,6 +103,8 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
       id: true,
       checkInDate: true,
       checkOutDate: true,
+      useType: true,
+      apartmentPlan: true,
       ratePackageByRoomType: true,
       inquiry: {
         select: {
@@ -184,9 +202,45 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
   let stayGst = dec(0);
   let roomNights = 0;
 
+  // An apartment let by the month or the week (2026-11-25): its rooms are priced by the rent, not by
+  // the night — the rule the quotation and the bill read (lib/apartment-rent.ts), only when the
+  // apartment is held on every night of the stay.
+  const allPicked = Array.from(new Set([...byDate.values()].flatMap((ids) => [...ids])));
+  const everyNight = (id: string) => stayDates.every((d) => byDate.get(d)?.has(id));
+  const { rentForBookingRooms } = await import("./apartment-booking-service.js");
+  const rentOf = await rentForBookingRooms(prisma, { ...entry, useType: String(entry.useType) }, allPicked.filter(everyNight));
+  const { rentForStay, periodWords } = await import("../../lib/apartment-rent.js");
+  const rent: NonNullable<PickPricing["rent"]> = [];
+  for (const [roomId, r] of rentOf) {
+    if (r.leadRoomId !== roomId) continue;
+    const priced = rentForStay({ plan: r.plan, checkIn, checkOut, weeklyRate: r.rate ?? "0", monthlyRate: r.rate ?? "0", rule: { serviceChargeRate, gstRate } });
+    rent.push({
+      unitLabel: r.unitLabel,
+      packageName: r.packageName,
+      plan: r.plan,
+      roomNumbers: r.roomNumbers ?? [],
+      periods: priced.periods.map((x) => ({
+        from: x.from,
+        to: x.to,
+        nights: x.nights,
+        ofNights: x.ofNights,
+        whole: x.whole,
+        words: periodWords(x, r.plan),
+        net: out(dec(x.net)),
+        serviceCharge: out(dec(x.serviceCharge)),
+        gst: out(dec(x.gst)),
+        total: out(dec(x.total)),
+      })),
+      net: out(dec(priced.net)),
+      serviceCharge: out(dec(priced.serviceCharge)),
+      gst: out(dec(priced.gst)),
+      total: out(dec(priced.total)),
+    });
+  }
+
   const nights: PickPricing["nights"] = [];
   for (const [k, date] of stayDates.entries()) {
-    const ids = byDate.get(date);
+    const ids = new Set([...(byDate.get(date) ?? [])].filter((id) => !rentOf.has(id)));
     if (!ids || ids.size === 0) continue;
     let net = dec(0);
     let unpriced = 0;
@@ -287,8 +341,17 @@ export async function priceRoomPick(prisma: PrismaClient, entryId: string, input
     nights,
     byType,
     byRoom,
-    totals: { roomNights, net: out(stayNet), serviceCharge: out(staySc), gst: out(stayGst), total: out(stayNet.plus(staySc).plus(stayGst)) },
+    totals: (() => {
+      const rentNet = rent.reduce((t, a) => t.plus(dec(a.net)), dec(0));
+      const rentSc = rent.reduce((t, a) => t.plus(dec(a.serviceCharge)), dec(0));
+      const rentGst = rent.reduce((t, a) => t.plus(dec(a.gst)), dec(0));
+      const net = stayNet.plus(rentNet);
+      const scT = staySc.plus(rentSc);
+      const gstT = stayGst.plus(rentGst);
+      return { roomNights, net: out(net), serviceCharge: out(scT), gst: out(gstT), total: out(net.plus(scT).plus(gstT)) };
+    })(),
     unpricedTypes: byType.filter((t) => t.rate == null).map((t) => ({ roomTypeId: t.roomTypeId, name: t.name })),
+    rent: rent.length ? rent : null,
   };
 }
 
