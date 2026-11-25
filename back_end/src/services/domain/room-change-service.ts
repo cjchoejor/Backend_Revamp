@@ -2097,6 +2097,11 @@ async function changeRoomToNewSegmentInner(
       stayCheckIn: ctx.checkIn,
       stayCheckOut: ctx.checkOut,
       nights: ctx.nightsIso.length,
+      apartmentRoomIds: await (await import("./apartment-booking-service.js")).apartmentRoomIdsOfEntry(
+        prisma,
+        input.entryId,
+        supplied.map((c) => c.roomId),
+      ),
     });
 
     // A pure re-price that changes nothing must not roll a segment (the operator opened the

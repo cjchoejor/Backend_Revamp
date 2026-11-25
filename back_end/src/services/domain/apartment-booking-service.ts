@@ -318,3 +318,14 @@ export async function refuseInHouseApartmentChange(prisma: PrismaClient, entryId
     );
   }
 }
+
+/**
+ * The rooms of a booking that are let as an apartment by the month or the week (2026-11-25) — they
+ * take no extra bed: the apartment is let for its guests, up to its own most, and priced by its rent.
+ * Read by the quotation's checks, the room change and the child's-age correction.
+ */
+export async function apartmentRoomIdsOfEntry(prisma: PrismaClient, entryId: string, roomIds: string[]): Promise<Set<string>> {
+  const e = await prisma.entry.findUnique({ where: { id: entryId }, select: { useType: true, apartmentPlan: true, checkInDate: true, checkOutDate: true } });
+  if (!e) return new Set();
+  return new Set((await rentForBookingRooms(prisma, { ...e, useType: String(e.useType) }, roomIds)).keys());
+}

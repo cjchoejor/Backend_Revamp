@@ -101,6 +101,22 @@ export type EntryRateReference = {
   packages: Array<{ id: string; name: string }>;
   /** Whether the stay's package per room type may still be changed (Inquiry and Negotiation). */
   packagesEditable: boolean;
+  /**
+   * The apartments among these rooms, on a booking let by the month or the week (2026-11-25): each
+   * apartment's rooms, the first carrying the rent. The negotiation table reads it — no extra bed
+   * there, a room of an apartment may stand empty while another holds the guests, and its room rate
+   * is the rent. Empty on any other booking.
+   */
+  apartments: Array<{
+    label: string;
+    plan: "MONTHLY" | "WEEKLY";
+    packageName: string;
+    leadRoomId: string;
+    roomIds: string[];
+    roomNumbers: string[];
+    /** The rent of one month or week, without and with service charge and GST (the server's figures). */
+    rent: { rate: string; total: string };
+  }>;
 };
 
 export async function buildEntryRateReference(
@@ -315,5 +331,33 @@ export async function buildEntryRateReference(
   // The prices already agreed on this booking, for the floor (2026-11-24, lib/msr-floor.ts).
   const agreed = await agreedRatesByType(prisma, entry.id);
   for (const t of roomTypes) t.agreedRate = agreed.get(t.roomTypeId)?.rate ?? null;
-  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff, packages, packagesEditable };
+  const { rentForBookingRooms } = await import("./apartment-booking-service.js");
+  const rent = await rentForBookingRooms(
+    prisma,
+    {
+      useType: String(entry.useType),
+      apartmentPlan: entry.apartmentPlan,
+      checkInDate: opts?.stay?.checkIn ?? entry.checkInDate,
+      checkOutDate: opts?.stay?.checkOut ?? entry.checkOutDate,
+    },
+    roomIds,
+  );
+  const { apartmentRateFigures } = await import("../admin/apartment-admin-service.js");
+  const byUnit = new Map<string, EntryRateReference["apartments"][number]>();
+  for (const [roomId, r] of rent) {
+    const figures = apartmentRateFigures(r.rate ?? "0", { serviceChargeRate, gstRate });
+    const u = byUnit.get(r.unitLabel) ?? {
+      label: r.unitLabel,
+      plan: r.plan,
+      packageName: r.packageName,
+      leadRoomId: r.leadRoomId,
+      roomIds: [],
+      roomNumbers: r.roomNumbers ?? [],
+      rent: { rate: figures.rate, total: figures.total },
+    };
+    u.roomIds.push(roomId);
+    byUnit.set(r.unitLabel, u);
+  }
+  const apartments = [...byUnit.values()];
+  return { entryId: entry.id, currency, nights, gstRate, serviceChargeRate, party, roomTypes, plansOff, packages, packagesEditable, apartments };
 }

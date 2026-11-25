@@ -376,14 +376,23 @@ export async function buildQuotationPreview(
   // bed prices WITH one — the preview's whole value is being the figure the quote will
   // actually produce. Order/length are preserved, so the by-index reads below stay valid;
   // the per-room `extraBedAutoAdded` flag tells the desk to show the correction.
+  const stayCheckIn = opts?.stayOverride?.checkIn ?? entry.checkInDate;
+  const stayCheckOut = opts?.stayOverride?.checkOut ?? entry.checkOutDate;
+  // An apartment let monthly or weekly is priced by its rent (2026-11-25), as the draft prices it — for
+  // the dates being priced (a stay extension's projection prices its own). Its rooms take no extra bed.
+  const rentByRoom = await rentForBookingRooms(
+    prisma,
+    { useType: String(entry.useType), apartmentPlan: entry.apartmentPlan, checkInDate: stayCheckIn ?? null, checkOutDate: stayCheckOut ?? null },
+    input.roomCompositions.map((c) => c.roomId),
+  );
+  if (rentByRoom.size) {
+    input = { ...input, roomCompositions: input.roomCompositions.map((c) => (rentByRoom.has(c.roomId) ? { ...c, extraBedCount: 0 } : c)) };
+  }
   const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
-    maxExtraBedsForRoom: (c) => roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null,
+    maxExtraBedsForRoom: (c) => (rentByRoom.has(c.roomId) ? 0 : (roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null)),
   });
   input = { ...input, roomCompositions: bedNorm.compositions };
   const autoAddedIndexes = new Set(bedNorm.autoAddedIndexes);
-
-  const stayCheckIn = opts?.stayOverride?.checkIn ?? entry.checkInDate;
-  const stayCheckOut = opts?.stayOverride?.checkOut ?? entry.checkOutDate;
   const stayNights =
     stayCheckIn && stayCheckOut
       ? Math.max(1, Math.round((stayCheckOut.getTime() - stayCheckIn.getTime()) / 86_400_000))
@@ -417,13 +426,6 @@ export async function buildQuotationPreview(
 
   const fallbackRef = fallbackRateType ? refByType.get(fallbackRateType) : undefined;
 
-  // An apartment let monthly or weekly is priced by its rent (2026-11-25), as the draft prices it — for
-  // the dates being priced (a stay extension's projection prices its own).
-  const rentByRoom = await rentForBookingRooms(
-    prisma,
-    { useType: String(entry.useType), apartmentPlan: entry.apartmentPlan, checkInDate: stayCheckIn ?? null, checkOutDate: stayCheckOut ?? null },
-    input.roomCompositions.map((c) => c.roomId),
-  );
   const priced = input.roomCompositions.map((c) => {
     const room = roomById.get(c.roomId);
     const typeRef = (room?.roomTypeId ? refByType.get(room.roomTypeId) : undefined) ?? fallbackRef;
