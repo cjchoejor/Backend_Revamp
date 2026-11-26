@@ -23,9 +23,15 @@ import {
   scheduledInspectionTimers,
   type BookingInspectionStanding,
 } from "../../lib/room-inspection-standing.js";
-import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
 import { rowsAtCheckout } from "../../lib/rooms-in-use.js";
-import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
+import { CHECKOUT_RELEASE_REASON, readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
+
+/** A room another booking already holds: its hold stays when this guest leaves it. */
+const HELD_FOR_ANOTHER: ReadonlySet<InventoryClaimState> = new Set([
+  InventoryClaimState.CONFIRMED,
+  InventoryClaimState.COMMITTED_HELD,
+  InventoryClaimState.SPECULATIVELY_HELD,
+]);
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
@@ -534,10 +540,13 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   const assignmentsToCheckOut = distinctAssignments.filter((a) => !releasedIds.has(a.roomId));
   if (assignmentsToCheckOut.length === 0) return { alreadyDeparted: true } as const;
 
-  // Every room the guest is leaving must read OCCUPIED. Fail-fast, in words, naming the room.
-  for (const a of assignmentsToCheckOut) {
-    enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: a.room.currentClaimState, roomNumber: a.room.roomNumber });
-  }
+  // The guest leaving decides, not the room's flag (2026-11-26, operator: "Room 204 reads as free,
+  // though the guest is checking out of it" on a booking whose stay had run past its dates — the
+  // flag had been set free while the guest was still in, and nothing on the desk could set it back).
+  // A room that reads occupied, free or departed goes to "needs cleaning"; a room another booking
+  // already holds keeps that hold and is marked dirty, so housekeeping cleans it before that guest's
+  // check-in. Either way the checkout is recorded against this booking, which is what says the
+  // guest let the room go.
 
   const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as any, "housekeeping.sla.windowMinutes"));
   if (!Number.isFinite(windowMinutes) || windowMinutes < 1) throw new MissingConfigurationError("housekeeping.sla.windowMinutes");
@@ -554,16 +563,25 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   const runInTx = async (tx: Prisma.TransactionClient): Promise<string[]> => {
     const ids: string[] = [];
     for (const a of assignmentsToCheckOut) {
-      await tx.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+      const from = a.room.currentClaimState;
+      const heldForAnother = HELD_FOR_ANOTHER.has(from);
+      if (!heldForAnother) {
+        await tx.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+      }
       await markRoomDirtyOnDepartureTx(tx, a.room.id);
       await tx.roomClaimStateEvent.create({
         data: {
           roomId: a.room.id,
           entryId,
-          fromState: InventoryClaimState.OCCUPIED,
-          toState: InventoryClaimState.DEPARTED_DIRTY,
+          fromState: from,
+          toState: heldForAnother ? from : InventoryClaimState.DEPARTED_DIRTY,
           actorId,
-          reason: "S8 checkout completion",
+          reason:
+            from === InventoryClaimState.OCCUPIED
+              ? CHECKOUT_RELEASE_REASON
+              : heldForAnother
+                ? `${CHECKOUT_RELEASE_REASON} — the room stays held for the next booking and is marked for cleaning`
+                : `${CHECKOUT_RELEASE_REASON} — the room read ${String(from).toLowerCase().replace(/_/g, " ")}, though the guest was in it`,
         },
       });
       // The guest has left: the room goes back to its usual bed setup (2026-09-19).

@@ -12,6 +12,11 @@ const OUT_OF_ROOM: ReadonlySet<InventoryClaimState> = new Set([
   InventoryClaimState.FREE,
 ]);
 
+/** The reason check-out writes on the room's claim event. A room another booking already holds
+ *  keeps its hold when the guest leaves it, so that event's state does not change — the reason is
+ *  what says this booking let the room go (2026-11-26). */
+export const CHECKOUT_RELEASE_REASON = "S8 checkout completion";
+
 export type RoomReleasedStanding = {
   roomId: string;
   roomNumber: string;
@@ -72,18 +77,18 @@ export async function readRoomsReleasedByBooking(db: Db, entryId: string): Promi
   const events = roomIds.length
     ? await db.roomClaimStateEvent.findMany({
         where: { entryId, roomId: { in: roomIds }, createdAt: { gte: made.createdAt } },
-        select: { roomId: true, toState: true, createdAt: true },
+        select: { roomId: true, toState: true, createdAt: true, reason: true },
         orderBy: { createdAt: "desc" },
       })
     : [];
-  const lastEvent = new Map<string, { toState: InventoryClaimState; createdAt: Date }>();
+  const lastEvent = new Map<string, { toState: InventoryClaimState; createdAt: Date; reason: string | null }>();
   for (const e of events) if (!lastEvent.has(e.roomId)) lastEvent.set(e.roomId, e);
 
   const rooms: RoomReleasedStanding[] = roomIds.map((roomId) => {
     const room = byRoom.get(roomId)!;
     const last = lastEvent.get(roomId);
     if (last) {
-      const released = OUT_OF_ROOM.has(last.toState);
+      const released = OUT_OF_ROOM.has(last.toState) || (last.reason ?? "").startsWith(CHECKOUT_RELEASE_REASON);
       return { roomId, roomNumber: room.roomNumber, released, readFrom: "BOOKING", releasedAt: released ? last.createdAt.toISOString() : null };
     }
     const released = room.flag === InventoryClaimState.DEPARTED_DIRTY || room.flag === InventoryClaimState.DEPARTED_CLEAN;
