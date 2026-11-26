@@ -206,16 +206,17 @@ export async function addRoomsToStay(prisma: PrismaClient, actor: Actor, entryId
     select: { id: true, roomNumber: true, roomType: { select: { maxCapacity: true, maxExtraBeds: true, maxChildren: true } } },
   });
   const numberOf = new Map(addedRooms.map((r) => [r.id, r.roomNumber]));
-  // What the rooms sleep (2026-11-26, operator: "it shouldn't allow more than the max occupant"): guests
-  // aged 11 and over count against each room's beds and its extra beds, children under 11 against its
-  // children. The whole and each room alike.
-  const sleeps = (t: { maxCapacity: number; maxExtraBeds: number } | null) => (t ? t.maxCapacity + t.maxExtraBeds : 0);
+  // What the rooms sleep (2026-11-26, operator: "it shouldn't allow more than the max occupant"; "max 3
+  // adults can be accommodated"): a room type's maxCapacity is its ceiling with the extra bed already in it
+  // (capacity-validation-service's OVER_MAX_OCCUPANCY), so guests aged 11 and over count against it alone;
+  // children under 11 against maxChildren. The whole and each room alike.
+  const sleeps = (t: { maxCapacity: number } | null) => (t ? t.maxCapacity : 0);
   const sleepsAll = addedRooms.reduce((n, r) => n + sleeps(r.roomType), 0);
   const kidsAll = addedRooms.reduce((n, r) => n + (r.roomType?.maxChildren ?? 0), 0);
   const word = addedRooms.length === 1 ? `Room ${addedRooms[0].roomNumber}` : `Rooms ${addedRooms.map((r) => r.roomNumber).join(", ")}`;
   if (want.adults > sleepsAll) {
     throw new ValidationError(
-      `${word} sleep${addedRooms.length === 1 ? "s" : ""} at most ${sleepsAll} guest${sleepsAll === 1 ? "" : "s"} aged 11 and over (extra beds included) — ${want.adults} were asked for`,
+      `${word} sleep${addedRooms.length === 1 ? "s" : ""} at most ${sleepsAll} guest${sleepsAll === 1 ? "" : "s"} aged 11 and over — ${want.adults} were asked for`,
     );
   }
   if (want.c6to10 + want.under6 > kidsAll) {
@@ -227,7 +228,7 @@ export async function addRoomsToStay(prisma: PrismaClient, actor: Actor, entryId
     }
     const t = addedRooms.find((x) => x.id === r.roomId)?.roomType ?? null;
     if (t && (r.adultCount ?? 0) > sleeps(t)) {
-      throw new ValidationError(`Room ${numberOf.get(r.roomId)} sleeps at most ${sleeps(t)} guests aged 11 and over (extra beds included)`);
+      throw new ValidationError(`Room ${numberOf.get(r.roomId)} sleeps at most ${sleeps(t)} guests aged 11 and over`);
     }
     if (t && (r.cnb6To10Count ?? 0) + (r.cnbUnder6Count ?? 0) > t.maxChildren) {
       throw new ValidationError(`Room ${numberOf.get(r.roomId)} takes at most ${t.maxChildren} child${t.maxChildren === 1 ? "" : "ren"} under 11`);
