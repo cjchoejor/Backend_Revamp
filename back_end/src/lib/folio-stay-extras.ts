@@ -51,10 +51,26 @@ const dayOf = (d: Date) => d.toISOString().slice(0, 10);
 export function splitStayAndExtras<L extends StayLedgerLine>(lines: readonly L[]): StayAndExtras<L> {
   const roomLineTypes = new Set<string>(["ROOM_CHARGE", "STAY"]);
   const stayKey = (roomId: string | null, chargeDate: Date, description: string) => `${roomId ?? ""}|${dayOf(chargeDate)}|${description}`;
-  const isStayCharge = (l: L) =>
+  const isPricedLine = (l: L) =>
     classifyFolioLine(l) === "CHARGE" &&
+    !l.description.startsWith(CORRECTION_LINE_PREFIX) &&
     (roomLineTypes.has(String(l.lineType)) ||
       (String(l.lineType) === "F_AND_B" && l.description.startsWith(NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX)));
+  // A correction of a night's own line, dated that night, goes with the stay: the system's own
+  // (a room changed tonight puts tonight's line right, and the new pass's quotation prices the
+  // change). A correction made later — the desk's, a charge put right after the bill was settled
+  // (2026-11-26) — is added to the stay, as the rule above says: the quotation does not hold it.
+  // Its service charge and GST corrections are judged the same way, by the same date.
+  const byId = new Map(lines.map((l) => [l.id, l]));
+  const originalOf = (l: L) => {
+    const m = /^Correction for ([^:]+):/.exec(l.description);
+    return m ? byId.get(m[1]) : undefined;
+  };
+  const isStayCharge = (l: L) => {
+    if (!l.description.startsWith(CORRECTION_LINE_PREFIX)) return isPricedLine(l);
+    const o = originalOf(l);
+    return !!o && isPricedLine(o) && dayOf(o.chargeDate) === dayOf(l.chargeDate);
+  };
   const stayKeys = new Set(lines.filter(isStayCharge).map((l) => stayKey(l.roomId ?? null, l.chargeDate, l.description)));
   const isStayTax = (l: L) => {
     const cls = classifyFolioLine(l);
