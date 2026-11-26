@@ -13,7 +13,7 @@
  * Check-out and Closed it is the record of who stayed. One thing can be done here (2026-11-25): a
  * guest filed on another guest's row is swapped back (`SwapGuestsDialog`).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
@@ -24,7 +24,7 @@ import { seatPartyByComposition } from "@/lib/desk/party-rooms";
 import { fmtDmy } from "@/lib/ds/format";
 import { IdPhotoViewerHost } from "@/components/desk/workspace/id-photo-viewer";
 import { IdentityProofBlock, partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
-import { SubTabs, Tool } from "../steps/kit";
+import { Overlay, Tool } from "../steps/kit";
 import type { EntryDetail } from "@/types/api";
 import { Button } from "@/design-system";
 import { SwapGuestsDialog, type SwapCandidate } from "./guests-swap";
@@ -47,38 +47,56 @@ export function useGuestsRecorded(entry: EntryDetail | null, on: boolean) {
 }
 
 /**
- * Two sub-tabs (2026-11-26, operator: "a subtab like info which shows the records of guest documents and
- * then edit where they can upload or change the info … use the same system to detect the info"):
- * Info — what is recorded, as before; Edit — the guest table itself, with its photo, phone code and the
- * reading of the ID, open from Arrival to the end of the stay (it is read-only once sealed).
+ * What is recorded, with the guest table one press away in a pop-up (2026-11-26, operator: the table
+ * squeezed into the narrow panel — "i think we need a pop up for this edit field"). An earlier cut the
+ * same day had it as an Edit sub-tab. The table is the same one as at Arrival and Check-in: type, photo,
+ * phone code and the reading of the ID; it is open from Arrival to Check-out, read-only once sealed.
  */
 export function GuestsView({ entry }: { entry: EntryDetail }) {
   const editable = entry.status === "ACTIVE" && ["S5", "S6", "S7", "S8"].includes(entry.currentStage);
+  const [editing, setEditing] = useState(false);
   return (
-    <SubTabs
-      label="The guests"
-      param="gsub"
-      tabs={[
-        { key: "info", label: "Info", content: <GuestsInfo entry={entry} /> },
-        editable
-          ? {
-              key: "edit",
-              label: "Edit",
-              content: (
-                <div className="guests-edit">
-                  <Tool inert={false}>
-                    <IdentityProofBlock entry={entry} title="The guests' details and ID" />
-                  </Tool>
-                </div>
-              ),
-            }
-          : null,
-      ]}
-    />
+    <>
+      <GuestsInfo entry={entry} onEdit={editable ? () => setEditing(true) : undefined} />
+      {editing ? <GuestsEditDialog entry={entry} onClose={() => setEditing(false)} /> : null}
+    </>
   );
 }
 
-function GuestsInfo({ entry }: { entry: EntryDetail }) {
+/** The guest table in a wide pop-up over the page. Close, the X or Escape closes it; what is typed is saved as it is typed. */
+function GuestsEditDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <Overlay>
+      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="dialog guests-editor" role="dialog" aria-modal="true" aria-label="The guests' details and ID" data-guests-editor="">
+          <button type="button" className="dialog-x" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+          <div className="body">
+            <Tool inert={false}>
+              <IdentityProofBlock entry={entry} title="The guests' details and ID" />
+            </Tool>
+          </div>
+          <div className="foot">
+            <span className="dlg-next">Each detail is saved as you leave its box.</span>
+            <Button kind="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+function GuestsInfo({ entry, onEdit }: { entry: EntryDetail; onEdit?: () => void }) {
   const { session } = useSession();
   const list = useQuery({
     queryKey: ["identity-proofs", entry.id],
@@ -174,6 +192,14 @@ function GuestsInfo({ entry }: { entry: EntryDetail }) {
               {allOpen ? "Close all" : "Open all"}
             </button>
           ) : null}
+        </div>
+      ) : null}
+      {onEdit ? (
+        <div className="gv-edit">
+          {/* Green while guests are still to be recorded — the next thing to do (UIappeal). */}
+          <Button className={coverage && !coverage.satisfied ? "go" : undefined} kind={coverage && !coverage.satisfied ? "primary" : "secondary"} onClick={onEdit}>
+            Edit details and IDs
+          </Button>
         </div>
       ) : null}
       {groups.map(([roomId, rows]) => (

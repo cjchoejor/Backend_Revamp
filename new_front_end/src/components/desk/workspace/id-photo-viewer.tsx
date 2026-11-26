@@ -38,7 +38,8 @@ const subscribe = (f: () => void) => {
 function useArea(open: boolean) {
   const [box, setBox] = useState<{ top: number; left: number; width: number; height: number } | null>(null);
   const measure = useCallback(() => {
-    const file = document.querySelector<HTMLElement>("aside.file");
+    // Over the guest editor's pop-up (2026-11-26) the photo takes the right half, the table's left half in reach.
+    const file = document.querySelector("[data-guests-editor]") ? null : document.querySelector<HTMLElement>("aside.file");
     const r = file?.getBoundingClientRect();
     if (r && r.width > 240) setBox({ top: r.top, left: r.left, width: r.width, height: Math.min(r.height, window.innerHeight - r.top) });
     else setBox({ top: 0, left: Math.round(window.innerWidth / 2), width: Math.round(window.innerWidth / 2), height: window.innerHeight });
@@ -133,7 +134,7 @@ function ViewerBody() {
         left: box.left,
         width: box.width,
         height: box.height,
-        zIndex: 83,
+        zIndex: document.querySelector("[data-guests-editor]") ? 88 : 83,
         background: "rgba(246, 246, 244, 0.55)",
         backdropFilter: "blur(6px)",
         WebkitBackdropFilter: "blur(6px)",

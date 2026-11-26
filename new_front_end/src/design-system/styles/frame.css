@@ -3207,3 +3207,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .keys-table tr.keys-left td {
   color: var(--ink-3, #6b6f6c);
 }
+
+/* The Guests tab's editor in a pop-up (2026-11-26): the guest table needs the room the panel lacks. */
+.ds .dialog.guests-editor { width: min(1240px, calc(100vw - 32px)); max-width: 100%; position: relative; }
+.ds .dialog.guests-editor > .dialog-x { z-index: 2; }
+.ds .dialog.guests-editor .body { padding-top: var(--s4); }
+.ds .guests-view .gv-edit { display: flex; justify-content: flex-end; margin: var(--s2) 0; }
