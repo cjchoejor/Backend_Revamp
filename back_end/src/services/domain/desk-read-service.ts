@@ -116,6 +116,20 @@ const listSelect = {
   },
   // The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's
   // "pay during the stay by …" the desk is reminded on.
+  // Waiting for the FOM (2026-11-26): a guest asking to leave owing at Check-out, and a change
+  // to the booking prepared at Negotiation — the bell lists both for the FOM and the GM.
+  leaveOwingRequests: {
+    where: { status: "REQUESTED" },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, amountOwed: true, guestWords: true, requestedAt: true },
+  },
+  negotiationAmendmentRequests: {
+    where: { state: "REQUESTED" as const },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, summary: true, requestedAt: true },
+  },
   checkInPaymentDeferrals: {
     where: { status: { in: ["REQUESTED", "APPROVED"] } },
     orderBy: { createdAt: "desc" as const },
@@ -580,7 +594,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "LEAVE_OWING_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -590,6 +604,7 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
+  "NOTIFICATION.LEAVE_OWING_REQUESTED": "LEAVE_OWING_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
   "NOTIFICATION.BLOCK_TIME_ENDED": "BLOCK_ENDED",
   "NOTIFICATION.REFUND_DUE": "REFUND_DUE",
@@ -657,6 +672,8 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
             ? { kind: "CHECKIN", remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: false }
             : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED"
               ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
+              : r.eventType === "NOTIFICATION.LEAVE_OWING_REQUESTED"
+                ? { kind: "LEAVE_OWING", remaining: num(p.amountOwed), remindersSent: null, dueBy: null, billed: false }
               : r.eventType === "NOTIFICATION.REFUND_DUE"
                 ? { kind: "REFUND", remaining: num(p.amount), remindersSent: null, dueBy: null, billed: false }
               : null,

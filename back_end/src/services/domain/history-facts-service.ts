@@ -16,6 +16,7 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { classifyFolioLine, NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX, NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX } from "../../lib/folio-tax-lines.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
+import { hotelCalendarYmd } from "../../lib/stay-dates.js";
 import { HOTEL_TIMEZONE } from "../infrastructure/pdf-templates/legphel-document-format.js";
 
 type Ev = { id: string; eventType: string; payload: Prisma.JsonValue; timestamp: Date | string; entityId?: string | null };
@@ -545,6 +546,23 @@ export async function buildHistoryFacts(
           p.billingModel ? `Who pays: ${BILLING_WORDS(String(p.billingModel), party)}` : null,
           p.outstandingAfter != null ? (Number(p.outstandingAfter) > 0 ? `Still owed after it: ${money(p.outstandingAfter)}` : "Nothing left owed") : null,
         ]);
+        break;
+      // Leaving owing at Check-out, asked of the FOM (2026-11-26).
+      case "LEAVE_OWING.REQUESTED":
+        put(ev.id, [
+          p.amountOwed != null ? `Owed: ${money(p.amountOwed)}` : null,
+          p.guestWords ? `The guest said: "${String(p.guestWords)}"` : null,
+        ]);
+        break;
+      case "LEAVE_OWING.APPROVED":
+        put(ev.id, [
+          p.amountOwed != null ? `Left owing: ${money(p.amountOwed)}` : null,
+          p.payBy ? `Pay by ${hotelCalendarYmd(new Date(String(p.payBy))).split("-").reverse().join("/")}` : "No time limit",
+          p.note ? `The FOM's note: "${String(p.note)}"` : null,
+        ]);
+        break;
+      case "LEAVE_OWING.REJECTED":
+        put(ev.id, [p.note ? `Why: "${String(p.note)}"` : null]);
         break;
       case "KEY_RETURN.RECORDED":
         put(ev.id, [

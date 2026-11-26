@@ -19,6 +19,8 @@ import {
   previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
   checkInPaymentDeferralRequestSchema,
+  leaveOwingAskRequestSchema,
+  leaveOwingDecideRequestSchema,
   checkInPaymentDecisionRequestSchema,
   checkInPaymentWithdrawRequestSchema,
   decideNegotiationAmendmentRequestSchema,
@@ -1406,6 +1408,52 @@ entriesRouter.get("/:id/checkin-payment", requireActorLevel("L1"), async (req, r
     res.setHeader("Cache-Control", "no-store");
     const { readCheckInPayment } = await import("../../services/domain/checkin-payment-service.js");
     res.json(await readCheckInPayment(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Leaving owing at Check-out (2026-11-26): where it stands (L1, no-store), the desk's ask (L1), the
+ * FOM's decision (L2 — approving records the FOM's credit extension), the desk taking it back (L1).
+ */
+entriesRouter.get("/:id/leave-owing", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(await readLeaveOwing(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing", requireActorLevel("L1"), validateBody(leaveOwingAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askToLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.status(201).json(await askToLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, guestWords: req.body.guestWords }));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing/:requestId/decide", requireActorLevel("L2"), validateBody(leaveOwingDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(
+      await decideLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
+        entryId: req.params.id,
+        requestId: req.params.requestId,
+        decision: req.body.decision,
+        note: req.body.note ?? null,
+        payWithinDays: req.body.payWithinDays ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(await withdrawLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, requestId: req.params.requestId }));
   } catch (e) {
     next(e);
   }

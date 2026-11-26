@@ -1288,6 +1288,7 @@ model Entry {
   timers                       TimerRecord[]
   interimPaymentRequests       InterimPaymentRequest[]
   checkInPaymentDeferrals      CheckInPaymentDeferral[]
+  leaveOwingRequests           LeaveOwingRequest[]
   stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
@@ -2015,6 +2016,7 @@ model Folio {
 
   interimPaymentRequests  InterimPaymentRequest[]
   checkInPaymentDeferrals CheckInPaymentDeferral[]
+  leaveOwingRequests      LeaveOwingRequest[]
   advanceApplications     AdvanceApplication[]
 
   @@map("folios")
@@ -3266,6 +3268,41 @@ model CheckInPaymentDeferral {
 
   @@index([entryId, status])
   @@map("checkin_payment_deferrals")
+}
+
+/// The desk asks the FOM to let a guest leave owing at Check-out (2026-11-26, operator: "when such
+/// things where fom or other person needs to approve, does it pop up on the fom and gm's page").
+/// It shows in the FOM's and GM's bell; approving records the FOM's credit extension for what the
+/// bill still owes, and the desk then settles with part, or nothing, paid.
+model LeaveOwingRequest {
+  id                String    @id @default(uuid())
+  entryId           String
+  folioId           String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status            String    @default("REQUESTED")
+  /// What the bill still owed when the desk asked — the folio's balance, the server's figure.
+  amountOwed        Decimal   @db.Decimal(15, 2)
+  /// What the guest said.
+  guestWords        String
+  requestedBy       String
+  requestedLevel    String?
+  requestedAt       DateTime  @default(now())
+  decisionNote      String?
+  decidedBy         String?
+  decidedLevel      String?
+  decidedAt         DateTime?
+  /// The day the guest will pay by, when the FOM set one (the credit extension's own time).
+  payBy             DateTime?
+  /// The credit extension the approval recorded.
+  creditExtensionId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("leave_owing_requests")
 }
 
 /// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.

@@ -473,6 +473,9 @@ foliosRouter.post("/folios/:id/settle", requireActorLevel("L1"), validateBody(in
       // authority, never a body field an L1 could type.
       actorLevel: req.actor!.level,
     });
+    // A "leave owing" request still waiting has nothing left to ask once the bill is settled.
+    const { closeLeaveOwingOnSettle } = await import("../../services/domain/leave-owing-service.js");
+    await closeLeaveOwingOnSettle(prisma, req.params.id, req.actor!.actorId).catch(() => 0);
     res.json(updated);
   } catch (e) {
     next(e);
