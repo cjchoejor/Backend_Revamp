@@ -48,7 +48,7 @@ export type RefundMade = {
   stage: string | null;
   method: string | null;
   by: string | null;
-  kind: "CANCELLED" | "NO_SHOW" | "PAID_OVER" | "REQUEST" | "OTHER";
+  kind: "CANCELLED" | "NO_SHOW" | "PAID_OVER" | "VOUCHER_REDUCED" | "REQUEST" | "OTHER";
   why: string;
   reason: string | null;
   reference: string | null;

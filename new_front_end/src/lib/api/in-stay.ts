@@ -51,12 +51,25 @@ export async function correctFolioCharge(
     correctionDate: string;
   },
 ) {
-  return apiRequest<FolioLineSummary>(`/api/folios/${folioId}/corrections`, {
+  return apiRequest<FolioLineSummary & { afterSettlement?: SettledCorrectionOutcome }>(`/api/folios/${folioId}/corrections`, {
     method: "POST",
     session,
     body,
   });
 }
+
+/** What follows a charge corrected after the bill was settled (2026-11-26) — the server's words. */
+export type SettledCorrectionOutcome = {
+  stateBefore: string;
+  stateAfter: string;
+  billingModel: string;
+  payer: { kind: "GUEST" | "PARTY"; name: string };
+  owedNow: number;
+  voucherReduced: Array<{ voucherPaymentId: string; paymentId: string; amount: number }>;
+  refundDue: { amount: number; billingModel: string; payerKind: "GUEST" | "PARTY"; payerName: string; wayItCame: string } | null;
+  invoicesReplaced: Array<{ oldId: string; oldRef: string; newId: string }>;
+  invoicesCarry: string[];
+};
 
 export async function postCreditNote(
   session: Session,

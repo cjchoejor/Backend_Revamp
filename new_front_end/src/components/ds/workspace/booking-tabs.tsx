@@ -458,7 +458,7 @@ export function ChargesView({
                     <tr key={x.id}>
                       <td>{fmtStamp(x.receivedAt, tz)}</td>
                       <td>
-                        {out ? "Paid back" : "Received"}
+                        {out ? (x.paymentMethod === "VOUCHER" ? "The agency's voucher reduced" : "Paid back") : "Received"}
                         {stepWord(x.stage) ? <span className="meta"> · at {stepWord(x.stage)}</span> : null}
                         {x.notes ? <span className="meta"> · {x.notes}</span> : null}
                       </td>

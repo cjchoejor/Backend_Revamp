@@ -308,7 +308,7 @@ function CheckoutActs({
   const chargeWhy = !folio
     ? "There is no bill on this booking"
     : settled
-      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge"
+      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step, under Charges"
       : folio.state !== "LIVE"
         ? "The bill is not open"
         : !live
@@ -335,7 +335,7 @@ function CheckoutActs({
   const backWhy = !live
     ? "Only while the booking is at Check-out"
     : settled
-      ? "The bill is settled — a charge found now is posted on the Closed step"
+      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step"
       : !fom
         ? "The FOM's call"
         : undefined;
@@ -620,7 +620,7 @@ function FolioTableCard({
   const shut = !folio
     ? "There is no bill on this booking."
     : isSettled(folio.state)
-      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step, under Charges."
       : folio.state !== "LIVE"
         ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
         : null;

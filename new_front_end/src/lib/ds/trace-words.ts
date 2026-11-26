@@ -207,6 +207,8 @@ const WORDS: Record<string, string> = {
   "ENTRY.S5.CANCELLED": "Cancelled",
   "ENTRY.S6.CANCELLED": "Cancelled at check-in",
   "HOUSEKEEPING.ROOM_CLEANED": "Room cleaned",
+  "FOLIO.CHARGE_CORRECTED_AFTER_SETTLEMENT": "A charge corrected after the bill was settled",
+  "INVOICE.REPLACED": "Tax invoice replaced by a new one",
   "LEAVE_OWING.REQUESTED": "Asked the FOM to let the guest leave owing",
   "LEAVE_OWING.APPROVED": "The FOM let the guest leave owing",
   "LEAVE_OWING.REJECTED": "The FOM turned down leaving owing",

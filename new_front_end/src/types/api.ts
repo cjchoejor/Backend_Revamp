@@ -252,6 +252,8 @@ export type PaymentRecordSummary = {
   currency: string;
   receivedAt: string;
   notes?: string | null;
+  /** How it was paid (the payload carries every column of the row). */
+  paymentMethod?: string | null;
 };
 
 export type WriteOffRecordSummary = {
