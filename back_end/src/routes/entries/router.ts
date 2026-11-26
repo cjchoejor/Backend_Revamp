@@ -65,6 +65,7 @@ import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js"
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { describeBookingInspections, roomListWords } from "../../lib/room-inspection-standing.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
+import { buildHistoryFacts } from "../../services/domain/history-facts-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 import { buildEntryBillingSummary } from "../../services/domain/entry-billing-summary-service.js";
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
@@ -706,6 +707,13 @@ entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) 
   try {
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const result = await getEntryTrace(prisma, req.params.id, limit);
+    // History asks for each act's facts in words, and the acts that leave no record of their own
+    // (a charge posted, who pays set) — 2026-11-26, services/domain/history-facts-service.ts.
+    if (req.query.facts === "1") {
+      const { facts, extra, stages } = await buildHistoryFacts(prisma, req.params.id, result.items);
+      res.json({ ...result, facts, extra, stages });
+      return;
+    }
     res.json(result);
   } catch (e) {
     next(e);

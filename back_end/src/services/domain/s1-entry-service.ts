@@ -302,7 +302,22 @@ export async function createEntry(
       stageContext: Stage.S1,
       inquiryId: entry.inquiryId,
       entryId: entry.id,
-      payload: { entryId: entry.id, stage: "S1" },
+      // What was asked when the booking was made (2026-11-26) — History says it in words.
+      payload: {
+        entryId: entry.id,
+        stage: "S1",
+        intake: {
+          checkInDate: entry.checkInDate ? entry.checkInDate.toISOString().slice(0, 10) : null,
+          checkOutDate: entry.checkOutDate ? entry.checkOutDate.toISOString().slice(0, 10) : null,
+          adultCount: entry.adultCount,
+          childCount: entry.childCount,
+          childAges: entry.childAges,
+          guestCount: entry.guestCount,
+          numberOfRooms: entry.numberOfRooms,
+          useType: entry.useType,
+          bedTypeRequest: entry.bedTypeRequest ?? null,
+        },
+      },
       createdBy: actorId,
     });
 
