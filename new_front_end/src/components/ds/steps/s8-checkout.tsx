@@ -47,6 +47,7 @@ import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import { TaxInvoiceSendDialog, type TaxInvoiceTarget } from "./tax-invoice-send";
+import { AskFomToLeaveOwing, LeaveOwingStatus, useLeaveOwing } from "./s8-leave-owing";
 import {
   AnswerLine,
   ChangeBookingMenu,
@@ -862,6 +863,8 @@ function HowSettled({
     setPaidNow(v ? "" : balance != null && balance > 0 ? String(balance) : "");
   };
   const mayLeaveOwing = guestPays && balance != null && balance > 0 && (fom || creditActive);
+  // The desk asks the FOM to let the guest leave owing (2026-11-26); the FOM answers on this card.
+  const leaveOwing = useLeaveOwing(entry, folioLive && guestPays && balance != null && balance > 0);
   const owingNow = owing && mayLeaveOwing;
   const typed = paidNow.trim() === "" ? (owingNow ? 0 : Number.NaN) : Number.parseFloat(paidNow);
   // Paid in full before Check-out — by the advance, a mid-stay payment — leaves nothing to take:
@@ -1266,12 +1269,15 @@ function HowSettled({
                 <Refusal
                   kind="authority"
                   message={`Leaving part of the ${money(balance, cur)} balance unpaid needs the FOM.`}
-                  guidance={`The FOM settles it, or records a credit extension that covers what is left${creditExpired ? " — the one on file has run out" : creditActive ? " — the one on file does not cover it" : ""}.`}
+                  guidance={`Ask the FOM below — they let the guest leave owing, or settle it themselves${creditExpired ? ". The credit extension on file has run out" : creditActive ? ". The credit extension on file does not cover it" : ""}.`}
                 />
               </div>
             ) : null}
               </>
             )}
+            {!paidInFull ? (
+              <LeaveOwingStatus entry={entry} standing={leaveOwing.data} cur={cur} tz={tz} live={live} fom={fom} guest={guest} onDecided={refresh} />
+            ) : null}
             <div className="row-acts" style={{ marginTop: 12 }}>
               <Button
                 className={live && !settleReason ? "go" : undefined}
@@ -1284,6 +1290,9 @@ function HowSettled({
                     handed over (2026-11-26, operator: "it's not actually taking payment"). */}
                 {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : owingNow ? (typed > 0 ? <>Take payment &amp; leave the rest owing</> : "Settle — leave it owing") : <>Take payment &amp; settle</>}
               </Button>
+              {!fom && !paidInFull && guestPays ? (
+                <AskFomToLeaveOwing entry={entry} standing={leaveOwing.data} cur={cur} live={live} guest={guest} onDone={refresh} />
+              ) : null}
               {fom && !paidInFull ? (
                 <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
                   {creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing"}

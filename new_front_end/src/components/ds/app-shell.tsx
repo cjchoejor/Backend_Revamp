@@ -143,7 +143,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       .filter((i) => i.band !== "waiting")
       // A block whose time ended goes to the FOM and GM, first on their list (2026-11-05).
       .filter((i) => fom || !i.critical)
-      .sort((a, b) => Number(!!b.critical) - Number(!!a.critical));
+      // Then what waits for the FOM's answer (2026-11-26), on the FOM's and GM's bell.
+      .sort((a, b) => Number(!!b.critical) - Number(!!a.critical) || (fom ? Number(!!b.fomDecides) - Number(!!a.fomDecides) : 0));
     // clock.now moves every 15 s; the list only needs to follow it loosely
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)]);
