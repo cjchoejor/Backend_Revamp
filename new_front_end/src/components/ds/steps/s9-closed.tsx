@@ -46,6 +46,7 @@ import type { EntryDetail, InvoiceSummary } from "@/types/api";
 import { sentWords, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import { CorrectionDialog } from "./s7-folio";
+import { ChargeCorrectionAsks } from "./charge-correction-asks";
 import {
   ActTiles,
   AnswerLine,
@@ -166,6 +167,8 @@ export function S9Closed({
         <SealedPapers entry={entry} tz={clock.tz} />
         {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
       </div>
+      {/* A charge the desk asked the FOM to correct — above every view (2026-11-26). */}
+      {tail ? <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={entry.status === "ACTIVE"} /> : null}
       {tail ? (
         <>
           <div className="pane" hidden={at("late")}>
@@ -439,8 +442,9 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
               key: "late",
               label: "Charges",
               sub: "a late charge, or a wrong one put right",
-              onClick: openPane && fom && !noShow ? () => openPane("late") : undefined,
-              reason: noShow ? "a no-show never stayed" : !fom ? "needs the FOM" : undefined,
+              // Open to the front desk too (2026-11-26): it asks the FOM to correct a charge there.
+              onClick: openPane && !noShow ? () => openPane("late") : undefined,
+              reason: noShow ? "a no-show never stayed" : undefined,
             },
             {
               key: "invoice",
@@ -707,9 +711,7 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
       ? "The record is sealed — its bill is read-only."
       : writtenOff
         ? "This bill was written off."
-        : !fom
-          ? "Correcting a charge after the bill is settled is the FOM's."
-          : null;
+        : null;
   return (
     <>
       <StepCard
@@ -725,14 +727,15 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
             <Button className={why ? undefined : "go"} icon="pen" state={why ? "inert" : "default"} reason={why ?? undefined} onClick={() => setPosting(true)}>
               Post a charge
             </Button>
+            {/* The FOM's; the front desk asks the FOM, who answers from the bell (2026-11-26). */}
             <Button kind="secondary" state={whyNotCorrect ? "inert" : "default"} reason={whyNotCorrect ?? undefined} onClick={() => setCorrecting(true)}>
-              Correct a charge
+              {fom ? "Correct a charge" : "Ask the FOM to correct a charge"}
             </Button>
           </div>
         </Live>
       </StepCard>
       {why ? null : <LateCharge entry={entry} open={posting} onClose={() => setPosting(false)} />}
-      {whyNotCorrect ? null : <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} />}
+      {whyNotCorrect ? null : <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} ask={!fom} />}
     </>
   );
 }

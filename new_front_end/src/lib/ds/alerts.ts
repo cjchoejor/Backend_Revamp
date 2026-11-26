@@ -18,6 +18,7 @@ export const ALERT_KIND_WORD: Record<DeskAlertKind, string> = {
   PAYMENT_REMINDER: "Payment reminder",
   PAY_LATER_ASKED: "Asks to pay later",
   LEAVE_OWING_ASKED: "Asks to leave owing",
+  CHARGE_CORRECTION_ASKED: "Asks to correct a charge",
   VIP_ARRIVAL: "VIP arrival",
   BLOCK_ENDED: "Block time ended",
   REFUND_DUE: "Refund to make",
@@ -54,6 +55,8 @@ export function alertHeadline(a: DeskAlert): string {
       return [`Asks to pay the rest of the bill later — the FOM decides`, a.payment?.remaining != null ? money(a.payment.remaining) : null].filter(Boolean).join(" · ");
     case "LEAVE_OWING_ASKED":
       return [`Asks to let the guest leave owing at check-out — the FOM decides`, a.payment?.remaining != null ? money(a.payment.remaining) : null].filter(Boolean).join(" · ");
+    case "CHARGE_CORRECTION_ASKED":
+      return [`Asks to correct a charge on a settled bill — the FOM decides`, a.payment?.remaining != null ? `net to ${money(a.payment.remaining)}` : null].filter(Boolean).join(" · ");
     case "BLOCK_ENDED":
       return "The block's time ended. The rooms are still held, and the FOM or GM decides";
     case "REFUND_DUE":

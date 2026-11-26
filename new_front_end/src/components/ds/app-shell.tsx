@@ -16,6 +16,9 @@ import { money } from "@/lib/ds/format";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getWaitingForFom } from "@/lib/api/charge-corrections";
+import { chimeOn, playChime, readyChimeOnFirstTouch, setChimeOn } from "@/lib/ds/chime";
 import { toast } from "sonner";
 import { Icon, IconSprite, OfflineBanner } from "@/design-system";
 import { useSession, redirectToLogin } from "@/hooks/use-session";
@@ -109,6 +112,33 @@ export function AppShell({ children }: { children: ReactNode }) {
   // A guest's reply by email nobody has read yet (2026-11-12): a row each, opening the booking's Emails.
   const repliesQ = useUnseenReplies();
   const replies = repliesQ.data?.items ?? [];
+  // What waits for the FOM, asked every 8 s even while this tab is behind another (2026-11-26,
+  // operator: "the notification on fom or higher doesn't update unless i refresh the tab"). The desk
+  // list itself is read every minute; a change here reads it again at once.
+  const qc = useQueryClient();
+  const waitingQ = useQuery({
+    queryKey: ["waiting-for-fom"],
+    queryFn: () => getWaitingForFom(session!),
+    enabled: !!session && fom,
+    staleTime: 0,
+    refetchInterval: 8_000,
+    refetchIntervalInBackground: true,
+    refetchOnWindowFocus: true,
+  });
+  const waitingKey = waitingQ.data?.key ?? null;
+  const lastWaitingKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (waitingKey == null) return;
+    const before = lastWaitingKey.current;
+    lastWaitingKey.current = waitingKey;
+    if (before != null && before !== waitingKey) void qc.invalidateQueries({ queryKey: ["desk-bookings"] });
+  }, [waitingKey, qc]);
+  // The bell's sound (2026-11-26): readied on the first press, on or off for this browser.
+  const [sound, setSound] = useState(true);
+  useEffect(() => {
+    readyChimeOnFirstTouch();
+    setSound(chimeOn());
+  }, []);
   const replyHref = (r: { entryId: string | null }) => (r.entryId ? `/bookings/${encodeURIComponent(r.entryId)}?view=docs&sub=emails` : "/bookings");
   const secondPage = SECOND.some((s) => isOn(pathname, s.href));
   // The six main pages take the stages' blue palette (2026-10-30, operator: "make the theme colour of
@@ -155,15 +185,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const bellOverdue = urgent.some((i) => i.band === "overdue" || i.critical) || lateRooms.length > 0;
   const bellItems = useMemo(
     () => [
-      ...urgent.map((i) => ({ key: `a:${i.key}`, text: i.need, who: i.name, href: `/bookings/${i.entryId}` })),
+      // Loud: what waits for the FOM's answer, and what is critical — on the FOM's and GM's bell.
+      ...urgent.map((i) => ({ key: `a:${i.key}`, text: i.need, who: i.name, href: `/bookings/${i.entryId}`, loud: fom && (!!i.fomDecides || !!i.critical) })),
       ...(lateRooms.length
         ? [{ key: "rooms-late", text: `${lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `${lateRooms.length} rooms`} past the clean-by time`, who: "Housekeeping", href: "/housekeeping" }]
         : []),
-      ...refundsWaiting.map((r) => ({ key: `r:${r.id}`, text: `A refund of ${money(r.amountAsked, r.currency)} to make`, who: r.guest.name ?? r.booking.id, href: `/billing?tab=refunds&refund=${encodeURIComponent(r.id)}` })),
+      ...refundsWaiting.map((r) => ({ key: `r:${r.id}`, text: `A refund of ${money(r.amountAsked, r.currency)} to make`, who: r.guest.name ?? r.booking.id, href: `/billing?tab=refunds&refund=${encodeURIComponent(r.id)}`, loud: fom })),
       ...replies.map((r) => ({ key: `m:${r.id}`, text: `${r.fromName ?? r.fromAddress ?? "The guest"} replied by email`, who: r.guest ?? r.referenceNumber, href: replyHref(r) })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [urgent, lateRooms.length, refundsWaiting, replies],
+    [urgent, lateRooms.length, refundsWaiting, replies, fom],
   );
   const seenBell = useRef<Set<string> | null>(null);
   const [arrived, setArrived] = useState<{ text: string; who: string; href: string; more: number; at: number } | null>(null);
@@ -176,7 +207,11 @@ export function AppShell({ children }: { children: ReactNode }) {
     seenBell.current = keys;
     if (!before) return; // the first reading is what was already there
     const fresh = bellItems.filter((x) => !before.has(x.key));
-    if (fresh.length) setArrived({ text: fresh[0].text, who: fresh[0].who, href: fresh[0].href, more: fresh.length - 1, at: Date.now() });
+    if (!fresh.length) return;
+    // What needs the FOM's answer comes first on the card, and rings.
+    const first = fresh.find((x) => "loud" in x && x.loud) ?? fresh[0];
+    setArrived({ text: first.text, who: first.who, href: first.href, more: fresh.length - 1, at: Date.now() });
+    if (fresh.some((x) => "loud" in x && x.loud)) playChime();
   }, [bellItems, bellReady]);
   useEffect(() => {
     if (!arrived) return;
@@ -285,6 +320,22 @@ export function AppShell({ children }: { children: ReactNode }) {
                     the heading row, so it is in view however long the list below runs. */}
                 <div className="ntf-head">
                   <h4>What needs a person now</h4>
+                  {fom ? (
+                    <button
+                      type="button"
+                      className="btn btn-secondary compact"
+                      aria-pressed={sound}
+                      title={sound ? "A sound plays when something needs your answer" : "No sound"}
+                      onClick={() => {
+                        const on = !sound;
+                        setSound(on);
+                        setChimeOn(on);
+                        if (on) playChime(true);
+                      }}
+                    >
+                      {sound ? "Sound on" : "Sound off"}
+                    </button>
+                  ) : null}
                   <Link href="/notifications" className="btn btn-secondary compact" onClick={() => bell.setOpen(false)}>
                     See all notifications
                   </Link>

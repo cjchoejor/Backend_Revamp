@@ -48,6 +48,7 @@ import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import { TaxInvoiceSendDialog, type TaxInvoiceTarget } from "./tax-invoice-send";
 import { AskFomToLeaveOwing, LeaveOwingStatus, useLeaveOwing } from "./s8-leave-owing";
+import { ChargeCorrectionAsks } from "./charge-correction-asks";
 import {
   AnswerLine,
   ChangeBookingMenu,
@@ -231,6 +232,9 @@ export function S8CheckOut({
         ) : null}
       </WorkPopup>
 
+      {/* A charge the desk asked the FOM to correct — above both views, so it is read on either (2026-11-26). */}
+      {past ? null : <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={live} />}
+
       <div className="pane" hidden={at("charges")}>
         <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} correctable={correctable} target={chargeTarget} setTarget={setChargeTarget} />
       </div>
@@ -325,7 +329,7 @@ function CheckoutActs({
       key: "charge",
       label: settled ? "Correct a charge" : "Add or correct a charge",
       note: settled
-        ? "A share is settled: a wrong charge is put right here by the FOM. A new charge goes on the Closed step, under Charges."
+        ? "A share is settled: a wrong charge is put right here by the FOM, or the desk asks the FOM. A new charge goes on the Closed step, under Charges."
         : "The bill's lines, and a charge found this morning — posted while the bill is open.",
       onSelect: chargeWhy ? undefined : onCharges,
       reason: chargeWhy,
@@ -631,7 +635,7 @@ function FolioTableCard({
   const shut = !folio
     ? "There is no bill on this booking."
     : isSettled(folio.state)
-      ? "A share of the bill is settled — a wrong charge is still corrected here, by the FOM. A new charge goes on the Closed step, under Charges."
+      ? "A share of the bill is settled — a wrong charge is still corrected here: by the FOM, or the desk asks the FOM. A new charge goes on the Closed step, under Charges."
       : folio.state !== "LIVE"
         ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
         : null;
@@ -652,15 +656,17 @@ function FolioTableCard({
               Post a charge
             </Button>
             {correctable ? (
-              <Button
-                className={fom ? "go" : undefined}
-                kind={fom ? undefined : "secondary"}
-                state={fom ? "default" : "inert"}
-                reason={fom ? undefined : "once a share is settled, correcting a charge is the FOM's"}
-                onClick={() => setOpen("correct")}
-              >
-                Correct a charge
-              </Button>
+              fom ? (
+                <Button className="go" onClick={() => setOpen("correct")}>
+                  Correct a charge
+                </Button>
+              ) : (
+                // Once a share is settled it is the FOM's — the front desk asks, and the FOM answers
+                // from the bell (2026-11-26).
+                <Button className="go" onClick={() => setOpen("correct")}>
+                  Ask the FOM to correct a charge
+                </Button>
+              )
             ) : (
               <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
                 Correct a charge
@@ -677,7 +683,7 @@ function FolioTableCard({
             </Button>
           </div>
           <PostChargeDialog entry={entry} open={open === "post"} onClose={() => setOpen(null)} target={target} setTarget={setTarget} />
-          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} />
+          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} ask={correctable && !fom} />
           <CreditNoteDialog entry={entry} open={open === "credit"} onClose={() => setOpen(null)} />
         </Live>
       ) : null}

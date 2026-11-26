@@ -134,6 +134,9 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
     for (const o of r.leaveOwingRequests ?? []) {
       if (step === 8) push(r, { need: "Asks to let the guest leave owing · the FOM decides", band: "overdue", work: "money", fomDecides: true, since: new Date(o.requestedAt).getTime() });
     }
+    for (const c of r.chargeCorrectionRequests ?? []) {
+      if (step === 8 || step === 9) push(r, { need: "Asks to correct a charge · the FOM decides", band: "overdue", work: "money", fomDecides: true, since: new Date(c.requestedAt).getTime() });
+    }
     for (const a of r.negotiationAmendmentRequests ?? []) {
       if (step === 2) push(r, { need: "A change waits for the FOM's approval", band: "overdue", work: "holds", fomDecides: true, since: new Date(a.requestedAt).getTime() });
     }
