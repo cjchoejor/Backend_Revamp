@@ -37,6 +37,7 @@ import {
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { FolioSendDialog } from "@/components/ds/workspace/folio-papers";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
+import { isZeroNightRow, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtDay, fmtInstantDate, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
@@ -186,9 +187,18 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
   const co = effectiveCheckOutIso(entry);
   const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
   const nights = nightsOf(ci, co);
-  const roomNumbers = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
-    a.localeCompare(b, undefined, { numeric: true }),
-  );
+  // The rooms the guest left at check-out; the rooms slept in before a move are said under them
+  // (2026-11-26, lib/desk/party-rooms.ts `roomsInUseFor`) — never a room never slept in.
+  const byNo = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+  const roomNumbers = Array.from(new Set(roomsInUseFor(entry, null).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort(byNo);
+  const movedFrom = Array.from(
+    new Set(
+      (entry.roomAssignments ?? [])
+        .filter((a) => !isZeroNightRow(a))
+        .map((a) => a.room?.roomNumber)
+        .filter((x): x is string => !!x && !roomNumbers.includes(x)),
+    ),
+  ).sort(byNo);
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
   const stayTotal = billing.data?.stayTotal ?? null;
   const passes = entry.segmentNumber ?? 1;
@@ -224,7 +234,10 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
           <div>
             <b>{roomNumbers.length ? roomNumbers.join(", ") : entry.numberOfRooms ?? "—"}</b>
           </div>
-          <div className="meta">{entry.guestCount != null ? plural(entry.guestCount, "guest") : "—"}</div>
+          <div className="meta">
+            {entry.guestCount != null ? plural(entry.guestCount, "guest") : "—"}
+            {movedFrom.length ? ` · moved from ${movedFrom.join(", ")} during the stay` : ""}
+          </div>
         </div>
         <div>
           <div className="meta">Booked by</div>
