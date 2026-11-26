@@ -547,6 +547,22 @@ export async function buildHistoryFacts(
           p.outstandingAfter != null ? (Number(p.outstandingAfter) > 0 ? `Still owed after it: ${money(p.outstandingAfter)}` : "Nothing left owed") : null,
         ]);
         break;
+      // A charge corrected after the bill was settled (2026-11-26).
+      case "FOLIO.CHARGE_CORRECTED_AFTER_SETTLEMENT": {
+        const vr = Array.isArray(p.voucherReduced) ? (p.voucherReduced as Array<{ amount: number }>) : [];
+        const rd = p.refundDue as { amount?: number; payerName?: string } | null;
+        const ir = Array.isArray(p.invoicesReplaced) ? (p.invoicesReplaced as Array<{ oldRef: string; newId: string }>) : [];
+        put(ev.id, [
+          p.delta != null ? `Net ${Number(p.delta) < 0 ? "down" : "up"} by ${money(Math.abs(Number(p.delta)))}, its service charge and GST with it` : null,
+          p.reason ? `Why: "${String(p.reason)}"` : null,
+          p.payer ? `On ${String(p.payer)}'s share` : null,
+          ...vr.map((v) => `The agency's voucher reduced by ${money(v.amount)}`),
+          rd?.amount ? `To refund: ${money(rd.amount)} to ${rd.payerName ?? "the payer"}` : null,
+          ...ir.map((i) => `Tax invoice ${i.oldRef} replaced by ${i.newId}`),
+          Number(p.owedNow) > 0 ? `Owed now: ${money(p.owedNow)}` : null,
+        ]);
+        break;
+      }
       // Leaving owing at Check-out, asked of the FOM (2026-11-26).
       case "LEAVE_OWING.REQUESTED":
         put(ev.id, [

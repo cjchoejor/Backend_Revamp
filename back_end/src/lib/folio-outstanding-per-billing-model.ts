@@ -32,11 +32,27 @@ type Tx = Prisma.TransactionClient | PrismaClient;
  * bucket. If a bucket needs a per-bucket write-off later, extend `WriteOffRecord` with a
  * `billingModel` column and update this helper.
  */
+/**
+ * One payer's share before it is floored at zero (2026-11-26): lines − money in + money out.
+ * Below zero the payer paid more than their share — a charge corrected after settlement — and the
+ * hotel owes them the difference. Write-offs carry no payer and are left out.
+ */
+export async function computeNetForBillingModel(tx: Tx, folioId: string, billingModel: string): Promise<Prisma.Decimal> {
+  const { lineTotal, inTotal, outTotal } = await shareSums(tx, folioId, billingModel);
+  return round2(lineTotal.add(outTotal).sub(inTotal));
+}
+
 export async function computeOutstandingForBillingModel(
   tx: Tx,
   folioId: string,
   billingModel: string,
 ): Promise<Prisma.Decimal> {
+  const { lineTotal, inTotal, outTotal } = await shareSums(tx, folioId, billingModel);
+  // Decimal.max(0, x - y + z) — mirrors the whole-folio helper but scoped per bucket.
+  return round2(maxZeroSub(lineTotal.add(outTotal), inTotal));
+}
+
+async function shareSums(tx: Tx, folioId: string, billingModel: string) {
   // Resolve the folio's primary model so we can also count NULL-model lines as belonging to it.
   const folio = await tx.folio.findUnique({
     where: { id: folioId },
@@ -63,11 +79,7 @@ export async function computeOutstandingForBillingModel(
     tx.paymentRecord.aggregate({ where: paymentOutWhere, _sum: { amount: true } }),
   ]);
 
-  const lineTotal = toDecimal(lineAgg._sum.amount);
-  const inTotal = toDecimal(inAgg._sum.amount);
-  const outTotal = toDecimal(outAgg._sum.amount);
-  // Decimal.max(0, x - y + z) — mirrors the whole-folio helper but scoped per bucket.
-  return round2(maxZeroSub(lineTotal.add(outTotal), inTotal));
+  return { lineTotal: toDecimal(lineAgg._sum.amount), inTotal: toDecimal(inAgg._sum.amount), outTotal: toDecimal(outAgg._sum.amount) };
 }
 
 /**

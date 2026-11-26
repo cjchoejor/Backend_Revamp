@@ -311,6 +311,8 @@ export const recordFolioRefundRequestSchema = z.object({
   bankName: z.string().trim().max(80).optional(),
   journalNumber: z.string().trim().max(60).optional(),
   reason: z.string().trim().min(1).max(500),
+  /** Whose share it goes back from (2026-11-26). Left out: the bill as a whole. */
+  billingModel: z.string().trim().max(40).optional(),
 });
 export type RecordFolioRefundRequestDto = z.infer<typeof recordFolioRefundRequestSchema>;
 

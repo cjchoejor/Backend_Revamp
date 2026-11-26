@@ -5,6 +5,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { resolveSendTo } from "../../lib/send-to.js";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { CommissionDueStatus, EntryStatus, FolioLineType, FolioState, InvoiceState, InvoiceType, Stage } from "@prisma/client";
+import { updateIssuedInvoice } from "../../policies/31-invoice-integrity/p68-invoice-immutability.js";
 import { allocateReadableId, READABLE_ID_PREFIXES, allocateFolioLineId } from "../../lib/readable-id.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import { AppError, MissingConfigurationError, NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -92,7 +93,7 @@ export async function issueInvoiceAtS9(
   prisma: PrismaClient,
   folioId: string,
   actorId: string,
-  input: { entryId: string; templateKey?: string; billingModel?: string },
+  input: { entryId: string; templateKey?: string; billingModel?: string; actorLevel?: string | null },
 ) {
   const folio = await prisma.folio.findUnique({ where: { id: folioId }, include: { entry: true } });
   if (!folio?.entry) throw new NotFoundError("Folio");
@@ -112,13 +113,27 @@ export async function issueInvoiceAtS9(
     }
   }
 
+  // A new tax invoice replaces the one in force for the same bill (2026-11-26, operator ruling for
+  // a charge corrected after settlement: "a new tax invoice replacing the old one"; the same holds
+  // for a charge found after departure). The old one keeps the figures it went out with — one sent
+  // on WhatsApp and never made into a PDF is made now — and is marked replaced, pointing at the new.
+  const earlier = await prisma.invoice.findMany({
+    where: { folioId, invoiceType: InvoiceType.FINAL, state: { not: InvoiceState.SUPERSEDED }, billingModel: targetBucket },
+    orderBy: { createdAt: "asc" },
+  });
+  if (earlier.some((i) => i.dispatchedAt && !i.pdfStorageKey)) {
+    const { generateOrLoadInvoicePdf } = await import("./invoice-pdf-service.js");
+    for (const inv of earlier.filter((i) => i.dispatchedAt && !i.pdfStorageKey)) await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+  }
+  const replaces = earlier.map((i) => i.invoiceNumber ?? i.id);
+
   const now = new Date();
   return prisma.$transaction(async (tx) => {
     const invoiceId = await allocateReadableId(tx, "INVOICE" as const, now);
     const totalAmount = targetBucket
       ? await computeOutstandingForBillingModel(tx, folioId, targetBucket)
       : null;
-    return tx.invoice.create({
+    const created = await tx.invoice.create({
       data: {
         id: invoiceId,
         folioId,
@@ -134,9 +149,30 @@ export async function issueInvoiceAtS9(
           basis: "S9 issueInvoice",
           stage: Stage.S9,
           ...(targetBucket ? { billingModel: targetBucket } : {}),
+          ...(replaces.length ? { replaces: replaces.join(", "), replacesIds: earlier.map((i) => i.id) } : {}),
         },
       },
     });
+    for (const old of earlier) {
+      await updateIssuedInvoice(tx, old.id, { state: InvoiceState.SUPERSEDED, supersededById: invoiceId });
+      await tx.traceEvent.create({
+        data: {
+          eventType: "INVOICE.REPLACED",
+          actorId,
+          actorLevel: (input.actorLevel ?? "L1") as never,
+          entityType: "Invoice",
+          entityId: old.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S9,
+          inquiryId: folio.entry!.inquiryId,
+          entryId: input.entryId,
+          payload: { oldId: old.id, oldRef: old.invoiceNumber ?? old.id, newId: invoiceId, cause: "NEW_TAX_INVOICE_ISSUED" },
+          createdBy: actorId,
+        },
+      });
+    }
+    return created;
   });
 }
 

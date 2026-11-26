@@ -64,12 +64,28 @@ const voucherSelect = {
 
 type VoucherPaymentRow = Awaited<ReturnType<typeof loadVouchers>>[number];
 
+/**
+ * Every voucher, each with what it still covers (2026-11-26): a charge on the agency's share
+ * corrected after the bill was settled, before the agency paid, makes the voucher cover less — a
+ * money-out row of method VOUCHER pointing at it (`voucherReducedId`). The agency owes the voucher
+ * less those; a voucher reduced to nothing has nothing left to collect and is not listed.
+ */
 async function loadVouchers(prisma: PrismaClient, ids?: string[]) {
-  return prisma.paymentRecord.findMany({
+  const rows = await prisma.paymentRecord.findMany({
     where: { ...voucherWhere, ...(ids ? { id: { in: ids } } : {}) },
     orderBy: [{ receivedAt: "desc" }, { createdAt: "desc" }],
     select: voucherSelect,
   });
+  const cuts = rows.length
+    ? await prisma.paymentRecord.groupBy({ by: ["voucherReducedId"], where: { voucherReducedId: { in: rows.map((r) => r.id) } }, _sum: { amount: true } })
+    : [];
+  const cut = new Map(cuts.map((c) => [c.voucherReducedId!, toDecimal(c._sum.amount)]));
+  return rows
+    .map((r) => {
+      const reducedBy = cut.get(r.id) ?? toDecimal(0);
+      return { ...r, voucherAmount: r.amount, reducedBy, amount: toDecimal(r.amount).sub(reducedBy) };
+    })
+    .filter((r) => r.amount.gt(0) || !!r.voucherCollection);
 }
 
 function partyOf(p: VoucherPaymentRow) {
@@ -106,6 +122,9 @@ export async function listVouchers(prisma: PrismaClient, view: "OPEN" | "RECEIVE
     return {
       paymentId: p.id,
       amount: num(p.amount),
+      /** The voucher as taken at check-out, and what a correction took off it since (2026-11-26). */
+      voucherAmount: num(p.voucherAmount),
+      reducedBy: p.reducedBy.gt(0) ? num(p.reducedBy) : null,
       currency: p.currency || "BTN",
       takenAt: (p.receivedAt ?? p.createdAt).toISOString(),
       stage: p.stage,

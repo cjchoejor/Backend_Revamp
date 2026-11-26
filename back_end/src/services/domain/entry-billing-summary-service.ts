@@ -5,6 +5,8 @@ import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { classifyFolioLine, splitCombinedTax } from "../../lib/folio-tax-lines.js";
 import { splitStayAndExtras } from "../../lib/folio-stay-extras.js";
+import { computeNetForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
+import { wayMoneyCame } from "./settled-correction-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 /**
@@ -130,6 +132,8 @@ export interface EntryBillingSummary {
      * balance floors at zero, so this is the only place the excess shows. Null when none.
      */
     overpaid: number | null;
+    /** Each payer's money above their own share (2026-11-26) — empty when none. */
+    overpaidByPayer: Array<{ billingModel: string; amount: number; wayItCame: string }>;
     /** Per-room charge subtotals (2026-08-14, operator request) — net sum of the folio lines
      *  stamped with each roomId, sealed-selection order preserved by roomNumber sort. Null
      *  when no line carries a room (legacy folios). */
@@ -549,6 +553,21 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
                 .sort((a, b) => (a.spaceName ?? "").localeCompare(b.spaceName ?? ""))
             : null;
 
+    // Each payer's money above their own share (2026-11-26): a charge corrected after settlement
+    // leaves one payer paid over while another may still owe. Refunded from that payer's share.
+    const overpaidByPayer: Array<{ billingModel: string; amount: number; wayItCame: string }> = [];
+    const primaryPayer = (await prisma.folio.findUnique({ where: { id: entry.folio.id }, select: { billingModel: true } }))?.billingModel ?? null;
+    for (const bucket of await listBillingModelBucketsForFolio(prisma, entry.folio.id)) {
+      const over = (await computeNetForBillingModel(prisma, entry.folio.id, bucket)).neg();
+      if (over.gt(0)) {
+        overpaidByPayer.push({
+          billingModel: bucket,
+          amount: Number(round2(over).toFixed(2)),
+          wayItCame: await wayMoneyCame(prisma, entry.folio.id, bucket, primaryPayer),
+        });
+      }
+    }
+
     const stayExtras = splitStayAndExtras(lines);
     const placeOf = (l: (typeof lines)[number]) => (l.room?.roomNumber ? `Room ${l.room.roomNumber}` : l.space ? l.space.name ?? l.space.code ?? null : null);
     addedTotalDec = stayExtras.extras.length ? stayExtras.extrasTotal : null;
@@ -573,6 +592,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
         const raw = sumMoneyBy(lines, "amount").sub(toDecimal(inAgg._sum.amount)).add(refundedDec).sub(writtenOffDec);
         return raw.lt(0) ? money(raw.neg()) : null;
       })(),
+      overpaidByPayer,
       perRoomCharges,
       perSpaceCharges,
       unassignedCharges:

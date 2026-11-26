@@ -16,6 +16,7 @@ import { mulMoney, round2, toDecimal, ZERO } from "../../lib/money.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { evaluateAdvancePaymentCondition } from "./s3-payment-service.js";
 import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { afterSettledCorrectionTx, enforceSettledCorrectionAllowed } from "./settled-correction-service.js";
 import {
   classifyFolioLine,
   companionRateFromDescription,
@@ -534,6 +535,8 @@ export async function correctCharge(
     correctToAmount?: number;
     correctionDate: string;
   },
+  /** The verified session's level (2026-11-26): a settled bill is corrected by the FOM and above. */
+  opts?: { actorLevel?: string | null },
 ) {
   if (!input.originalFolioLineId?.trim()) throw new ValidationError("originalFolioLineId is required");
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
@@ -567,14 +570,21 @@ export async function correctCharge(
   const folio = await prisma.folio.findUnique({ where: { id: folioId } });
   if (!folio) throw new NotFoundError("Folio");
   if (folio.entryId !== input.entryId) throw new ValidationError("Folio does not belong to this entry");
-  enforceFolioLiveForS7ChargePosting({ folioState: folio.state });
 
   const entry = await prisma.entry.findUnique({ where: { id: input.entryId } });
   if (!entry) throw new NotFoundError("Entry");
-  // Corrections follow the same stage envelope as posting (2026-08-03): the checkout review
-  // is exactly when a wrong charge gets caught, so S8 pre-settlement must be able to fix it.
-  // The folio-LIVE gate above still blocks corrections once the folio has settled.
-  enforceEntryAtS7OrS8ForChargePosting({ currentStage: entry.currentStage });
+  // A settled bill is corrected too (2026-11-26): by the FOM and above, until the booking is
+  // sealed, and what follows (the voucher, the refund, the tax invoice) is settled-correction-service's.
+  const afterSettlement = folio.state !== FolioState.LIVE;
+  if (afterSettlement) {
+    enforceSettledCorrectionAllowed({ folioState: folio.state, entryStatus: entry.status, entryStage: entry.currentStage, actorLevel: opts?.actorLevel });
+  } else {
+    enforceFolioLiveForS7ChargePosting({ folioState: folio.state });
+    // Corrections follow the same stage envelope as posting (2026-08-03): the checkout review
+    // is exactly when a wrong charge gets caught, so S8 pre-settlement must be able to fix it.
+    enforceEntryAtS7OrS8ForChargePosting({ currentStage: entry.currentStage });
+  }
+  const lineStage = afterSettlement ? (entry.currentStage as Stage) : Stage.S7;
 
   const originalAmount = num(original.amount);
   if (hasTarget && input.correctToAmount! < 0 && originalAmount > 0) {
@@ -599,6 +609,23 @@ export async function correctCharge(
 
   await ensureChargeDateNotSealed(prisma, correctionDate);
 
+  // A tax invoice that went out keeps the figures it went out with (2026-11-26): one sent on
+  // WhatsApp may never have been made into a PDF, and made later it would print the corrected
+  // bill under the old number. Make it now, before the correction posts; refuse if it cannot be.
+  if (afterSettlement) {
+    const { generateOrLoadInvoicePdf } = await import("./invoice-pdf-service.js");
+    const sentNotMade = await prisma.invoice.findMany({
+      where: { folioId, invoiceType: "FINAL", state: { not: "SUPERSEDED" }, dispatchedAt: { not: null }, pdfStorageKey: null },
+    });
+    for (const inv of sentNotMade) {
+      try {
+        await generateOrLoadInvoicePdf(prisma, inv.id, actorId);
+      } catch {
+        throw new ValidationError(`The tax invoice ${inv.invoiceNumber ?? inv.id} could not be kept as it went out — try the correction again`);
+      }
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
     await ensureChargeDateNotSealed(tx, correctionDate);
 
@@ -617,7 +644,7 @@ export async function correctCharge(
         amount: new Prisma.Decimal(delta.toFixed(2)),
         currency: original.currency,
         chargeDate: correctionDate,
-        stage: Stage.S7,
+        stage: lineStage,
         postedBy: actorId,
         billingModel: correctionBillingModel,
         // A correction adjusts a charge already attributed to a room — the delta stays there.
@@ -687,7 +714,7 @@ export async function correctCharge(
             amount: round2(scDelta),
             currency: original.currency,
             chargeDate: correctionDate,
-            stage: Stage.S7,
+            stage: lineStage,
             postedBy: actorId,
             billingModel: correctionBillingModel,
             roomId: original.roomId,
@@ -705,7 +732,7 @@ export async function correctCharge(
             amount: round2(gstDelta),
             currency: original.currency,
             chargeDate: correctionDate,
-            stage: Stage.S7,
+            stage: lineStage,
             postedBy: actorId,
             billingModel: correctionBillingModel,
             roomId: original.roomId,
@@ -716,7 +743,20 @@ export async function correctCharge(
     }
 
     await recomputeFolioOutstandingBalance(tx, folioId);
-    return correctionLine;
+    if (!afterSettlement) return correctionLine;
+    const outcome = await afterSettledCorrectionTx(tx, {
+      folioId,
+      entryId: entry.id,
+      inquiryId: entry.inquiryId,
+      stage: entry.currentStage,
+      billingModel: correctionBillingModel ?? folio.billingModel ?? "GUEST_PAY",
+      originalLineId: original.id,
+      correctionLineId: correctionLine.id,
+      delta,
+      reason: input.reason.trim(),
+      actor: { actorId, actorLevel: opts?.actorLevel ?? "L2" },
+    });
+    return { ...correctionLine, afterSettlement: outcome };
   });
 }
 
