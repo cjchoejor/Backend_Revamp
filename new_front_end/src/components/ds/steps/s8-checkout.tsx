@@ -1189,7 +1189,9 @@ function HowSettled({
                 reason={live ? settleReason : "only while the booking is at Check-out"}
                 onClick={() => setConfirmOpen(true)}
               >
-                {paidInFull ? "Close the bill" : <>Take payment &amp; settle</>}
+                {/* Only money at the desk is "taken" — a voucher or an account settles with nothing
+                    handed over (2026-11-26, operator: "it's not actually taking payment"). */}
+                {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : <>Take payment &amp; settle</>}
               </Button>
               {fom && !paidInFull ? (
                 <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
@@ -1255,7 +1257,7 @@ function HowSettled({
       <DsDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title={paidInFull ? "Close the bill" : "Take payment and settle"}
+        title={paidInFull ? "Close the bill" : invoicesParty ? "Settle the bill" : "Take payment and settle"}
         caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
         busy={settle.isPending}
         footer={
@@ -1264,7 +1266,7 @@ function HowSettled({
               Not yet
             </Button>
             <Button icon="lock" state={settle.isPending ? "working" : "default"} workingLabel="Settling…" onClick={() => settle.mutate()}>
-              {paidInFull ? "Close the bill" : "Take payment"}
+              {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : "Take payment"}
             </Button>
           </>
         }
