@@ -187,20 +187,25 @@ function GuestsInfo({ entry, onEdit }: { entry: EntryDetail; onEdit?: () => void
           </b>{" "}
           {coverage.totalSlots === 1 ? "guest" : "guests"} recorded
           {coverage.vipExempt ? <span className="sm"> · a VIP booking — not required</span> : null}
-          {allKeys.length > 1 ? (
-            <button type="button" className="gv-all" onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}>
-              {allOpen ? "Close all" : "Open all"}
-            </button>
-          ) : null}
+          {/* One line (2026-11-26, operator: the Edit button on a row of its own took "too much space"). */}
+          <span className="gv-acts">
+            {allKeys.length > 1 ? (
+              <button type="button" className="gv-all" onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}>
+                {allOpen ? "Close all" : "Open all"}
+              </button>
+            ) : null}
+            {onEdit ? (
+              // Green while guests are still to be recorded — the next thing to do (UIappeal).
+              <Button compact className={coverage.satisfied ? undefined : "go"} kind={coverage.satisfied ? "secondary" : "primary"} onClick={onEdit}>
+                Edit
+              </Button>
+            ) : null}
+          </span>
         </div>
-      ) : null}
-      {onEdit ? (
-        <div className="gv-edit">
-          {/* Green while guests are still to be recorded — the next thing to do (UIappeal). */}
-          <Button className={coverage && !coverage.satisfied ? "go" : undefined} kind={coverage && !coverage.satisfied ? "primary" : "secondary"} onClick={onEdit}>
-            Edit details and IDs
-          </Button>
-        </div>
+      ) : onEdit ? (
+        <Button compact kind="secondary" onClick={onEdit}>
+          Edit details and IDs
+        </Button>
       ) : null}
       {groups.map(([roomId, rows]) => (
         <section key={roomId || "none"} className="gv-room">

@@ -3212,4 +3212,6 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .dialog.guests-editor { width: min(1240px, calc(100vw - 32px)); max-width: 100%; position: relative; }
 .ds .dialog.guests-editor > .dialog-x { z-index: 2; }
 .ds .dialog.guests-editor .body { padding-top: var(--s4); }
-.ds .guests-view .gv-edit { display: flex; justify-content: flex-end; margin: var(--s2) 0; }
+.ds .guests-view .gv-count { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .guests-view .gv-count .gv-acts { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.ds .guests-view .gv-count .gv-acts .gv-all { margin: 0; }
