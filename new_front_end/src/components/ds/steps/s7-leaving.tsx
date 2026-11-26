@@ -1089,8 +1089,6 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<AddRoomsOutcome | null>(null);
   const [moveFor, setMoveFor] = useState<{ room: AddRoomRow; holder: AddRoomHolder } | null>(null);
-  const [capMsg, setCapMsg] = useState<string | null>(null);
-  const [childrenTyped, setChildrenTyped] = useState("");
   const [legs, setLegs] = useState<RoomMoveLegInput[] | null>(null);
   const idOf = (n: number) => `ar-part-${n}-${entry.id}`;
   const goTo = (n: number) => {
@@ -1158,17 +1156,25 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   const part1Ready = picked.length > 0;
   // What the picked rooms sleep (2026-11-26, operator: "it shouldn't allow more than the max occupant"):
   // guests aged 11 and over against the beds and extra beds, children under 11 against the rooms' children.
-  const bedsBase = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0), 0);
-  const sleepsMax = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0) + (r.maxExtraBeds ?? 0), 0);
-  const kidsMax = Math.min(8, pickedRows.reduce((n, r) => n + (r.maxChildren ?? 0), 0));
+  // A room type's maxCapacity is its ceiling with the extra bed already in it (the hotel's capacity
+  // rule); guests aged 11 and over count against it, children under 11 against maxChildren besides.
+  const sleepsMax = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0), 0);
+  const kidsMax = pickedRows.reduce((n, r) => n + (r.maxChildren ?? 0), 0);
   const childMaxAge = policy.data?.ageBands.childMaxAge ?? 10;
-  const grownUps = adults + ages.filter((a) => a > childMaxAge).length;
-  const littleOnes = ages.filter((a) => a <= childMaxAge).length;
+  const agesKnown = d.kids.map((k) => (k === "" ? null : Number(k)));
+  const olderKids = agesKnown.filter((a) => a != null && a > childMaxAge).length;
+  const youngKids = agesKnown.filter((a) => a != null && a <= childMaxAge).length;
+  const grownUps = adults + olderKids;
+  const littleOnes = youngKids;
+  /** The most adults the rooms take beside the children aged 11 and over already named. */
+  const adultsRoom = Math.max(0, sleepsMax - olderKids);
+  /** The most children: the places adults leave, plus the rooms' children under 11. */
+  const kidsRoom = Math.min(8, Math.max(0, sleepsMax - adults) + kidsMax);
   const roomsWordPicked = roomsWord(pickedRows.map((r) => r.roomNumber));
   const part2Why = !adults && !d.kids.length
     ? "Say who sleeps in the new rooms"
     : !agesOk
-      ? "Type each child's age (0 to 17)"
+      ? "Pick each child's age"
       : grownUps > sleepsMax
         ? `${roomsWordPicked} sleep${pickedRows.length === 1 ? "s" : ""} at most ${sleepsMax} aged 11 and over — ${grownUps} asked`
         : littleOnes > kidsMax
@@ -1357,65 +1363,61 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
           />
           {stateOf(2) === "open" ? (
             <>
+              <p className="sm" id={`ar-sleeps-${entry.id}`} style={{ margin: 0 }}>
+                {roomsWordPicked} sleep{pickedRows.length === 1 ? "s" : ""} up to {sleepsMax} guest{sleepsMax === 1 ? "" : "s"} aged 11 and over, and {kidsMax}{" "}
+                {kidsMax === 1 ? "child" : "children"} under 11 besides.
+              </p>
               <div className="form3">
                 <div className="field">
                   <label>Adults</label>
-                  <input
-                    className="input"
-                    inputMode="numeric"
-                    value={d.adults}
-                    placeholder="0"
-                    aria-describedby={`ar-sleeps-${entry.id}`}
-                    onChange={(e) => {
-                      const typed = e.target.value.replace(/\D/g, "").slice(0, 2);
-                      if (typed && Number(typed) > sleepsMax) {
-                        setCapMsg(`${roomsWordPicked} sleep${pickedRows.length === 1 ? "s" : ""} at most ${sleepsMax} aged 11 and over, extra beds included`);
-                        set({ adults: String(sleepsMax) });
-                        return;
-                      }
-                      setCapMsg(null);
-                      set({ adults: typed });
-                    }}
-                  />
+                  <select className="input" value={d.adults} aria-describedby={`ar-sleeps-${entry.id}`} onChange={(e) => set({ adults: e.target.value })}>
+                    <option value="">Pick how many…</option>
+                    {Array.from({ length: sleepsMax + 1 }, (_, n) => n).map((n) => (
+                      <option key={n} value={String(n)} disabled={n > adultsRoom}>
+                        {n}
+                        {n > adultsRoom ? ` · ${olderKids ? `a child aged 11+ takes ${olderKids === 1 ? "a place" : "places"}` : "the room is full"}` : ""}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="field">
                   <label>Children</label>
-                  <input
-                    className="input"
-                    inputMode="numeric"
-                    value={d.kids.length ? String(d.kids.length) : childrenTyped}
-                    placeholder="0"
-                    onChange={(e) => {
-                      const typed = e.target.value.replace(/\D/g, "").slice(0, 1);
-                      let n = typed ? Number(typed) : 0;
-                      if (n > kidsMax) {
-                        setCapMsg(`${roomsWordPicked} take${pickedRows.length === 1 ? "s" : ""} at most ${kidsMax} ${kidsMax === 1 ? "child" : "children"} under 11`);
-                        n = kidsMax;
-                      } else setCapMsg(null);
-                      setChildrenTyped(typed && n === 0 ? "0" : "");
-                      set({ kids: Array.from({ length: n }, (_, i) => d.kids[i] ?? "") });
-                    }}
-                  />
+                  <select className="input" value={String(d.kids.length)} onChange={(e) => set({ kids: Array.from({ length: Number(e.target.value) }, (_, i) => d.kids[i] ?? "") })}>
+                    {Array.from({ length: Math.min(8, sleepsMax + kidsMax) + 1 }, (_, n) => n).map((n) => (
+                      <option key={n} value={String(n)} disabled={n > kidsRoom}>
+                        {n}
+                        {n > kidsRoom ? " · no place left" : ""}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
-              <p className="sm" id={`ar-sleeps-${entry.id}`} style={{ margin: 0 }}>
-                {roomsWordPicked} sleep{pickedRows.length === 1 ? "s" : ""} {bedsBase}
-                {sleepsMax > bedsBase ? ` (${sleepsMax} with ${sleepsMax - bedsBase === 1 ? "an extra bed" : "extra beds"})` : ""} aged 11 and over, and take{pickedRows.length === 1 ? "s" : ""} up to {kidsMax}{" "}
-                {kidsMax === 1 ? "child" : "children"} under 11.
-              </p>
-              {capMsg ? (
-                <p className="sm stop-ink ar-cap" role="alert">
-                  <b>!</b> {capMsg}
-                </p>
-              ) : null}
               {d.kids.length ? (
                 <div className="form3">
-                  {d.kids.map((k, i) => (
-                    <div key={i} className="field">
-                      <label>Child {i + 1}&rsquo;s age</label>
-                      <input className="input" inputMode="numeric" value={k} onChange={(e) => set({ kids: d.kids.map((x, j) => (j === i ? e.target.value.replace(/\D/g, "").slice(0, 2) : x)) })} />
-                    </div>
-                  ))}
+                  {d.kids.map((k, i) => {
+                    const mine = agesKnown[i];
+                    const olderOthers = adults + olderKids - (mine != null && mine > childMaxAge ? 1 : 0);
+                    const youngOthers = youngKids - (mine != null && mine <= childMaxAge ? 1 : 0);
+                    return (
+                      <div key={i} className="field">
+                        <label>Child {i + 1}&rsquo;s age</label>
+                        <select className="input" value={k} onChange={(e) => set({ kids: d.kids.map((x, j) => (j === i ? e.target.value : x)) })}>
+                          <option value="">Pick the age…</option>
+                          {Array.from({ length: 18 }, (_, a) => a).map((a) => {
+                            const older = a > childMaxAge;
+                            const shut = older ? olderOthers >= sleepsMax : youngOthers >= kidsMax;
+                            return (
+                              <option key={a} value={String(a)} disabled={shut}>
+                                {a}
+                                {older ? " · counts as an adult" : ""}
+                                {shut ? (older ? " — the room is full" : ` — ${kidsMax === 1 ? "one child" : `${kidsMax} children`} under 11 at most`) : ""}
+                              </option>
+                            );
+                          })}
+                        </select>
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
               <p className="sm" style={{ margin: 0 }}>
