@@ -192,6 +192,10 @@ export function S8CheckOut({
   );
 
   const chargeable = live && folio?.state === "LIVE";
+  // A share settled (the agency's voucher) leaves the guest's share to pay — a wrong charge on it is
+  // still put right here, by the FOM (2026-11-26, operator: "we need it in stage 8 itself, or else
+  // the guest can't check out without paying the wrong charge").
+  const correctable = live && isSettled(folio?.state);
   // A pane is hidden, never unmounted — see S8_PANES.
   const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
 
@@ -202,7 +206,7 @@ export function S8CheckOut({
         <Departure entry={entry} live={live} />
         {/* A damage found is answered before the bill is settled (2026-10-26). */}
         <DamageCard entry={entry} live={live} />
-        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable ? () => stepPane.open("charges") : undefined} />
+        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable || correctable ? () => stepPane.open("charges") : undefined} />
         <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
         <OverpaidCard entry={entry} live={live} />
         <Invoices entry={entry} live={live} tz={clock.tz} />
@@ -228,7 +232,7 @@ export function S8CheckOut({
       </WorkPopup>
 
       <div className="pane" hidden={at("charges")}>
-        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} target={chargeTarget} setTarget={setChargeTarget} />
+        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} correctable={correctable} target={chargeTarget} setTarget={setChargeTarget} />
       </div>
 
       {past ? null : (
@@ -308,7 +312,9 @@ function CheckoutActs({
   const chargeWhy = !folio
     ? "There is no bill on this booking"
     : settled
-      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step, under Charges"
+      ? live
+        ? undefined
+        : "Only while the booking is at Check-out"
       : folio.state !== "LIVE"
         ? "The bill is not open"
         : !live
@@ -317,8 +323,10 @@ function CheckoutActs({
   const charges: ChangeBookingItem[] = [
     {
       key: "charge",
-      label: "Add or correct a charge",
-      note: "The bill's lines, and a charge found this morning — posted while the bill is open.",
+      label: settled ? "Correct a charge" : "Add or correct a charge",
+      note: settled
+        ? "A share is settled: a wrong charge is put right here by the FOM. A new charge goes on the Closed step, under Charges."
+        : "The bill's lines, and a charge found this morning — posted while the bill is open.",
       onSelect: chargeWhy ? undefined : onCharges,
       reason: chargeWhy,
     },
@@ -335,7 +343,7 @@ function CheckoutActs({
   const backWhy = !live
     ? "Only while the booking is at Check-out"
     : settled
-      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step"
+      ? "A share is settled — a wrong charge is corrected from Charges; a new one goes on the Closed step"
       : !fom
         ? "The FOM's call"
         : undefined;
@@ -600,6 +608,7 @@ function FolioTableCard({
   entry,
   onTab,
   chargeable,
+  correctable = false,
   target,
   setTarget,
 }: {
@@ -607,6 +616,8 @@ function FolioTableCard({
   onTab: (target: string) => void;
   /** The bill is open at Check-out — a charge can still go on it. */
   chargeable: boolean;
+  /** A share is settled at Check-out — a wrong charge is still corrected, by the FOM (2026-11-26). */
+  correctable?: boolean;
   target: string;
   setTarget: (v: string) => void;
 }) {
@@ -620,7 +631,7 @@ function FolioTableCard({
   const shut = !folio
     ? "There is no bill on this booking."
     : isSettled(folio.state)
-      ? "The bill is settled — a charge found now, or a wrong one, is put right on the Closed step, under Charges."
+      ? "A share of the bill is settled — a wrong charge is still corrected here, by the FOM. A new charge goes on the Closed step, under Charges."
       : folio.state !== "LIVE"
         ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
         : null;
@@ -640,9 +651,21 @@ function FolioTableCard({
             <Button className={chargeable ? "go" : undefined} icon="pen" state={chargeable ? "default" : "inert"} reason={shut ?? undefined} onClick={() => setOpen("post")}>
               Post a charge
             </Button>
-            <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
-              Correct a charge
-            </Button>
+            {correctable ? (
+              <Button
+                className={fom ? "go" : undefined}
+                kind={fom ? undefined : "secondary"}
+                state={fom ? "default" : "inert"}
+                reason={fom ? undefined : "once a share is settled, correcting a charge is the FOM's"}
+                onClick={() => setOpen("correct")}
+              >
+                Correct a charge
+              </Button>
+            ) : (
+              <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
+                Correct a charge
+              </Button>
+            )}
             <Button
               kind="secondary"
               state={chargeable && fom ? "default" : "inert"}
