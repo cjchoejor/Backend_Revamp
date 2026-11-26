@@ -19,7 +19,8 @@ import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-ar
 import { withoutClocksOfRepliesOff } from "../../lib/reply-waits.js";
 import { readBookingRooms, roomUnitsOf, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 import { currentPassSeal } from "./room-placement-service.js";
-import { utcDateOnly } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelTodayUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { rowsInUse } from "../../lib/rooms-in-use.js";
 
 type Db = PrismaClient;
 
@@ -76,7 +77,7 @@ const listSelect = {
       corporateAccount: { select: { id: true, displayName: true } },
     },
   },
-  reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true } },
+  reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true, frozenCheckInDate: true, frozenCheckOutDate: true } },
   folio: {
     select: {
       id: true,
@@ -135,7 +136,8 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
   parkReason: string | null;
   /** When the park runs out — the PARKING_FOLLOW_UP clock. */
   parkFollowUpAt: string | null;
-  /** Distinct room numbers the booking holds, in number order. */
+  /** The rooms the booking is in now, in number order (lib/rooms-in-use.ts): never a room left
+   *  mid-stay or one never slept in. */
   roomNumbers: string[];
   /**
    * The rooms a booking holds before they are handed out at Arrival (2026-11-24, client: "for walk
@@ -210,14 +212,13 @@ export async function listDeskBookings(
     if (typeof reason === "string" && reason.trim()) reasonOf.set(t.entryId, reason.trim());
   }
 
+  const hotelToday = hotelTodayUtc();
   return rows.map((r) => {
+    // The rooms the booking is in now — never a room left mid-stay or one never slept in
+    // (2026-11-26, lib/rooms-in-use.ts; the Today list named 4 rooms on a 3-room booking).
     const numbers = new Set<string>();
-    for (const a of r.roomAssignments) {
-      if (!a.room?.roomNumber) continue;
-      // A zero-night row is a room the guest left before sleeping a night in it (a change on the
-      // first night, 2026-09-19) — the booking never used it, so it is not one of its rooms.
-      if (a.startDate && a.endDate && a.startDate.getTime() >= a.endDate.getTime()) continue;
-      numbers.add(a.room.roomNumber);
+    for (const a of rowsInUse(r.currentStage, r.roomAssignments, { checkout: effectiveCheckOutDate(r), hotelToday })) {
+      if (a.room?.roomNumber) numbers.add(a.room.roomNumber);
     }
     const follow = r.timers.find((t) => t.timerCode === "PARKING_FOLLOW_UP");
     return {

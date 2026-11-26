@@ -1,4 +1,5 @@
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
+import { sleptRows } from "../../lib/rooms-in-use.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -115,9 +116,10 @@ function stayFrame(entry: Context): { checkIn: Date | null; checkOut: Date | nul
   return { checkIn, checkOut, nights };
 }
 
-/** Distinct room numbers of the plan, numeric order — the statements' "Rooms" row. */
+/** Distinct room numbers the guest slept in, numeric order — the statements' "Rooms" row. A room
+ *  left the evening it was reached was never slept in (lib/rooms-in-use.ts). */
 function roomNumbersOf(entry: Context): string[] {
-  return Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((n): n is string => !!n))).sort(
+  return Array.from(new Set(sleptRows(entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((n): n is string => !!n))).sort(
     (a, b) => a.localeCompare(b, undefined, { numeric: true }),
   );
 }

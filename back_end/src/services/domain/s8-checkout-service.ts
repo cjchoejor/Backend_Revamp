@@ -24,6 +24,9 @@ import {
   type BookingInspectionStanding,
 } from "../../lib/room-inspection-standing.js";
 import { enforceRoomOccupiedForCheckoutCompletion } from "../../policies/01-availability/p01-s8-checkout-room-occupied-gate.js";
+import { rowsAtCheckout } from "../../lib/rooms-in-use.js";
+import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
+import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
 import { reportDeficiency } from "./deficient-condition-service.js";
@@ -508,35 +511,32 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   if (entry.roomAssignments.length === 0) throw new ValidationError("Entry has no room assignment");
   enforceEntryAtS8ForCheckoutCompletion({ currentStage: entry.currentStage });
 
-  // Batching rule: whenever the entry has multiple distinct room assignments, check out
-  // all of them together. Historically this keyed on groupBillingMode === "GROUP_MASTER",
-  // but that missed multi-room bookings below the group threshold. Dedup by roomId so
-  // a room-change history doesn't double-process the same room.
+  // The rooms the guest leaves NOW — the rows that run to the checkout morning (2026-11-26,
+  // lib/rooms-in-use.ts). It read every room the booking ever held and demanded each still read
+  // OCCUPIED, so a room left mid-stay — cleaned since, or another guest's by now — stopped the
+  // check-out for good ("Room must be OCCUPIED to check out", three bookings on the hotel's
+  // server), and would have marked another guest's room "needs cleaning" had it read OCCUPIED.
   const distinctAssignments = (() => {
     const seen = new Set<string>();
     const list: typeof entry.roomAssignments = [];
-    for (const a of entry.roomAssignments) {
+    for (const a of rowsAtCheckout(entry.roomAssignments, effectiveCheckOutDate(entry))) {
       if (seen.has(a.roomId)) continue;
       seen.add(a.roomId);
       list.push(a);
     }
     return list;
   })();
-  const allAssignments =
-    distinctAssignments.length > 1 ? distinctAssignments : [entry.roomAssignments[0]];
 
-  // Rooms the guest already left — a mid-stay room change end-dates the old room and marks
-  // it DEPARTED_DIRTY at the swap (2026-08-17: the old fail-fast demanded OCCUPIED on EVERY
-  // room, so any booking with an S7 in-place change could never physically check out). Also
-  // makes the call idempotent: a second whole-folio partial settlement finds nothing to do.
-  const alreadyDeparted = new Set(["DEPARTED_DIRTY", "DEPARTED_CLEAN"]);
-  const assignmentsToCheckOut = allAssignments.filter((a) => !alreadyDeparted.has(String(a.room.currentClaimState)));
+  // Rooms this booking already let go — read off its OWN claim events, never the room's flag now
+  // (a second whole-folio partial settlement, or one room released early). Makes the call idempotent.
+  const released = await readRoomsReleasedByBooking(prisma, entryId);
+  const releasedIds = new Set(released.rooms.filter((r) => r.released).map((r) => r.roomId));
+  const assignmentsToCheckOut = distinctAssignments.filter((a) => !releasedIds.has(a.roomId));
   if (assignmentsToCheckOut.length === 0) return { alreadyDeparted: true } as const;
 
-  // Every room still being checked out must be OCCUPIED. Fail-fast if any is in some OTHER
-  // state — the whole batch reverts and the operator sees which room is wrong.
+  // Every room the guest is leaving must read OCCUPIED. Fail-fast, in words, naming the room.
   for (const a of assignmentsToCheckOut) {
-    enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: a.room.currentClaimState });
+    enforceRoomOccupiedForCheckoutCompletion({ currentClaimState: a.room.currentClaimState, roomNumber: a.room.roomNumber });
   }
 
   const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as any, "housekeeping.sla.windowMinutes"));
