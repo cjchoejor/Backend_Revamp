@@ -1785,17 +1785,28 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       ) : null;
     }
     if (k === "notes") {
+      // Two colours (2026-11-26, operator): the notes in blue, the to-dos still open in amber —
+      // red, and saying so, once one is past its time.
       const c = notesQuery.data?.counts;
       if (!c) return null;
-      const n = c.notes + c.openTodos;
+      const onTime = c.openTodos - c.overdueTodos;
       return (
         <>
-          {n ? (
-            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}${c.openTodos ? ` · ${c.openTodos} to-do still open` : ""}`}>
-              {n}
+          {c.notes ? (
+            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}`}>
+              {c.notes}
             </span>
           ) : null}
-          {c.overdueTodos ? <span className="tab-n stop">{c.overdueTodos} late</span> : null}
+          {onTime > 0 ? (
+            <span className="tab-n todo" title={`${onTime} to-do${onTime === 1 ? "" : "s"} still open`}>
+              {onTime}
+            </span>
+          ) : null}
+          {c.overdueTodos ? (
+            <span className="tab-n stop" title={`${c.overdueTodos} to-do${c.overdueTodos === 1 ? "" : "s"} past its time`}>
+              {c.overdueTodos} late
+            </span>
+          ) : null}
         </>
       );
     }

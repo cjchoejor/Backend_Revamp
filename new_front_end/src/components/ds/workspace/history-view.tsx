@@ -15,7 +15,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Button, EmptyState, Icon } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
-import { getEntryTrace } from "@/lib/api/entries";
+import { getEntryHistory } from "@/lib/api/entries";
 import type { TraceEvent } from "@/lib/trace/humanize";
 import { fmtInstantDate, fmtTime, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
@@ -40,7 +40,7 @@ const LENSES: ReadonlyArray<readonly [Lens, string]> = [
 
 const LENS_TEST: Record<Exclude<Lens, "all" | "passes">, RegExp> = {
   changes:
-    /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|ROOM_MOVE|STAY_DATES|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|INTAKE|CONFIGURATION_SELECTED|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN|CALLER|SOURCE_CHANGED|GUEST_NAMED|GUEST_REQUEST|PREFERENCE|DECLINED/,
+    /TRANSITION|BACKFLOW|REENTRY|AMEND|ROOM_CHANGE|ROOM_MOVE|STAY_DATES|BED_TYPE|EXTENSION|EARLY_DEPARTURE|BILLING_MODEL|WHO_PAYS|INTAKE|CONFIGURATION_SELECTED|PICKED_BY_TYPE|HOLD|PARK|CANCELLED|EXPIRED|CLOSED|ROOM_KEY|CHECK_IN|ACTIVATION|ASSIGN|CALLER|SOURCE_CHANGED|GUEST_NAMED|GUEST_REQUEST|PREFERENCE|DECLINED/,
   money:
     /PAYMENT|CHARGE|CORRECTION|CREDIT_NOTE|WRITE_OFF|WRITEOFF|SETTLE|REFUND|INTERIM|ADVANCE|NIGHT_AUDIT\.|RECONCIL|PENALT|DISCOUNT|REPRICE|QUOTATION\.(CREATED|SUPERSEDED|ACCEPTED)|INVOICE\.(CREATED|ISSUED)/,
   approvals: /APPROV|OVERRIDE|AUTHORITY|WAIV|CREDIT_EXTENSION|VERIFIED|ESCALAT|ACCEPTED|CONFIRMED|DETERMIN/,
@@ -58,9 +58,10 @@ const whoDid = (ev: TraceEvent) =>
       : "system"
     : ev.actorName ?? ev.actorId;
 
-/** The step an act belongs to: where the booking was when it happened. */
-function chapterOf(ev: TraceEvent): number {
-  const code = ev.stageContext ?? ((ev.payload ?? {}) as { stage?: string }).stage ?? null;
+/** The step an act belongs to: where the booking was when it happened. An act recorded with no
+ *  step is filed by the server under the step the booking was at then (`stages`). */
+function chapterOf(ev: TraceEvent, stages?: Record<string, string>): number {
+  const code = ev.stageContext ?? stages?.[ev.id] ?? ((ev.payload ?? {}) as { stage?: string }).stage ?? null;
   return code && /^S[1-9]$/.test(code) ? stepNoOfStage(code) : 0;
 }
 
@@ -74,7 +75,10 @@ function ActLine({
   names,
   strong,
   withSeconds,
+  facts,
 }: {
+  /** What the act decided, in plain lines — written by the server from its records (2026-11-26). */
+  facts?: string[];
   ev: TraceEvent;
   /** The line it stands for in time and authorship, when that is another (a walk's head). */
   at?: TraceEvent;
@@ -85,7 +89,8 @@ function ActLine({
   withSeconds?: boolean;
 }) {
   const when = at ?? ev;
-  const detail = traceDetail(ev, names);
+  // The act's own facts say more than the record's ids; its reason or the guest's words stay.
+  const detail = facts?.length ? null : traceDetail(ev, names);
   const time = withSeconds
     ? new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "numeric", minute: "2-digit", second: "2-digit", hour12: true }).format(new Date(when.timestamp))
     : fmtTime(when.timestamp, tz);
@@ -97,6 +102,13 @@ function ActLine({
         {detail ? (
           <span className="meta" style={{ display: "block" }}>
             {detail}
+          </span>
+        ) : null}
+        {facts?.length ? (
+          <span className="hist-facts">
+            {facts.map((f, i) => (
+              <span key={i}>{f}</span>
+            ))}
           </span>
         ) : null}
       </span>
@@ -121,10 +133,12 @@ export function HistoryView({
 }) {
   const { session } = useSession();
   const trace = useQuery({
-    queryKey: ["entry-trace", entry.id, 300],
-    queryFn: () => getEntryTrace(session!, entry.id, 300),
+    queryKey: ["entry-trace", entry.id, 300, "history"],
+    queryFn: () => getEntryHistory(session!, entry.id, 300),
     enabled: !!session,
   });
+  const facts = trace.data?.facts ?? {};
+  const stages = trace.data?.stages;
   const [lens, setLens] = useState<Lens>(isLens(initialLens) ? initialLens : "all");
   const [showPasses, setShowPasses] = useState(false);
 
@@ -139,7 +153,15 @@ export function HistoryView({
     };
   }, [rooms, entry.reservations]);
 
-  const all = useMemo(() => (trace.data?.items ?? []).filter((e) => !isHousekeeping(e.eventType)), [trace.data]);
+  // A charge posted and who pays set leave no record of their own; the server adds them from
+  // their rows (2026-11-26).
+  const all = useMemo(
+    () =>
+      [...(trace.data?.items ?? []), ...(trace.data?.extra ?? [])]
+        .filter((e) => !isHousekeeping(e.eventType))
+        .sort((a, b) => b.timestamp.localeCompare(a.timestamp)),
+    [trace.data],
+  );
   // A room change is one line with its steps under it, not a dozen lines over four chapters.
   const items = useMemo(() => groupWalks(all, names), [all, names]);
   const shown = useMemo(
@@ -150,11 +172,11 @@ export function HistoryView({
   const chapters = useMemo(() => {
     const m = new Map<number, HistoryItem[]>();
     for (const it of shown) {
-      const n = chapterOf(itemAt(it));
+      const n = chapterOf(itemAt(it), stages);
       m.set(n, [...(m.get(n) ?? []), it]);
     }
     return [...m.entries()].sort((a, b) => (itemAt(b[1][0]!).timestamp ?? "").localeCompare(itemAt(a[1][0]!).timestamp ?? ""));
-  }, [shown]);
+  }, [shown, stages]);
   const [openWalk, setOpenWalk] = useState<Record<string, boolean>>({});
   const current = stepNoOfStage(entry.currentStage);
   const [open, setOpen] = useState<Record<number, boolean>>({});
@@ -234,7 +256,7 @@ export function HistoryView({
                           </div>
                           {list.map((it) =>
                             it.kind === "event" ? (
-                              <ActLine key={it.ev.id} ev={it.ev} tz={tz} names={names} />
+                              <ActLine key={it.ev.id} ev={it.ev} tz={tz} names={names} facts={facts[it.ev.id]} />
                             ) : (
                               <div key={it.head.id} className="hist-walk">
                                 <ActLine ev={it.head} at={it.at} tz={tz} names={names} strong />
@@ -253,7 +275,7 @@ export function HistoryView({
                                   {openWalk[it.head.id] ? (
                                     <div className="hist-walk-steps">
                                       {it.steps.map((ev) => (
-                                        <ActLine key={ev.id} ev={ev} tz={tz} names={names} withSeconds />
+                                        <ActLine key={ev.id} ev={ev} tz={tz} names={names} withSeconds facts={facts[ev.id]} />
                                       ))}
                                     </div>
                                   ) : null}

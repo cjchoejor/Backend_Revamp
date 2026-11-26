@@ -33,6 +33,20 @@ export async function getEntryTrace(session: Session, entryId: string, limit = 1
 }
 
 /**
+ * The booking's record for History (2026-11-26): every act, each act's facts in plain lines
+ * (`facts`, by act id — what was asked, the rooms and meal plans a quotation priced, how money was
+ * paid), the acts that leave no record of their own (`extra`: a charge posted, who pays set), and
+ * the step an act recorded without one belongs to (`stages`). Written by the server from the
+ * records the acts point to (services/domain/history-facts-service.ts).
+ */
+export async function getEntryHistory(session: Session, entryId: string, limit = 300) {
+  return apiRequest<{ items: TraceEvent[]; count: number; facts: Record<string, string[]>; extra: TraceEvent[]; stages: Record<string, string> }>(
+    `/api/entries/${entryId}/trace?limit=${limit}&facts=1`,
+    { session },
+  );
+}
+
+/**
  * The four governed guest-facing communications and their acknowledgement state — quotation (S2),
  * proforma invoice (S3), confirmation voucher (S4), pre-arrival reminder (S5).
  *

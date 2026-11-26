@@ -19,7 +19,7 @@ import { EmailsView } from "@/components/ds/workspace/booking-emails";
 import { useConversation } from "@/hooks/use-conversation";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { BookingRateSheet } from "@/components/ds/rate-sheet";
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, EmptyState } from "@/design-system";
@@ -40,13 +40,11 @@ import {
   type GuestRequest,
   type NoteAssignee,
 } from "@/lib/api/booking-notes";
-import { acknowledgeCommunication, getEntryTrace, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
+import { acknowledgeCommunication, replySettled, type EntryBillingSummary, type EntryCommunication } from "@/lib/api/entries";
 import { updateInquiryNotes } from "@/lib/api/inquiries";
 import { resendConfirmationVoucher } from "@/lib/api/confirmation";
 import { fmtDateTime, fmtDay, fmtStamp, fmtStay, hotelFormParts, money, plural } from "@/lib/ds/format";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
-import { isHousekeeping, traceWords } from "@/lib/ds/trace-words";
-import type { TraceEvent } from "@/lib/trace/humanize";
 import { StayBand, TripPapersShelf, useTripStays } from "./trip-papers-shelf";
 import { useStaysTogether } from "@/components/ds/steps/s2-together";
 import { TripMoneyReceived } from "@/components/ds/steps/s3-money";
@@ -1026,16 +1024,6 @@ export function RequestsView({ entry, sealed, tz }: { entry: EntryDetail; sealed
 
 /* ================================================================== Notes */
 
-/** The words a person typed with an act — a park, a decline, an answer — kept by the system. */
-function saidWith(ev: TraceEvent): string | null {
-  const p = (ev.payload ?? {}) as Record<string, unknown>;
-  for (const k of ["reason", "verbatimNote", "note", "justification", "decisionNote", "comment"]) {
-    const v = p[k];
-    if (typeof v === "string" && v.trim() && !/^[A-Z_]+$/.test(v.trim())) return v.trim();
-  }
-  return null;
-}
-
 type DueChoice = "" | "HOUR" | "T12" | "T16" | "T18" | "M10" | "PICK";
 
 export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
@@ -1045,11 +1033,6 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const q = useQuery({
     queryKey: ["booking-notes", entry.id],
     queryFn: () => listBookingNotes(session!, entry.id),
-    enabled: !!session,
-  });
-  const trace = useQuery({
-    queryKey: ["entry-trace", entry.id, 300],
-    queryFn: () => getEntryTrace(session!, entry.id, 300),
     enabled: !!session,
   });
   const again = () => {
@@ -1130,14 +1113,6 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const notes = items.filter((n) => n.kind === "NOTE");
   /** Notes written into a quotation's own terms before 2026-10-12 — read back, read-only. */
   const termNotes = q.data?.quotationNotes ?? [];
-  const system = useMemo(
-    () =>
-      (trace.data?.items ?? [])
-        .filter((ev) => !isHousekeeping(ev.eventType) && !/^(BOOKING_NOTE|GUEST_REQUEST)\./.test(ev.eventType))
-        .map((ev) => ({ ev, said: saidWith(ev) }))
-        .filter((x): x is { ev: TraceEvent; said: string } => !!x.said),
-    [trace.data],
-  );
   const whoWord = (a: string | null) => NOTE_ASSIGNEES.find(([k]) => k === a)?.[1] ?? "Desk";
 
   return (
@@ -1145,25 +1120,9 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
       <h3>
         Notes <span className="need">what was said, what was promised, and what is still to do</span>
       </h3>
+      {/* One list (2026-11-26, operator): "Kept by the system" repeated what History says — the
+          words typed with each act now read there, beside what the act did. */}
       <div className="steps-canvas">
-        {/* Sub-tabs (2026-10-12): what the desk keeps, and what the system kept with each act. */}
-        <SubTabs
-          label="Notes"
-          tabs={[
-            {
-              key: "notes",
-              label: <>
-                  Notes &amp; to-dos
-                  {q.data?.counts.overdueTodos ? (
-                    <span className="n stop">{q.data.counts.overdueTodos}</span>
-                  ) : q.data?.counts.openTodos ? (
-                    <span className="n warn">{q.data.counts.openTodos}</span>
-                  ) : notes.length + termNotes.length ? (
-                    <span className="n">{notes.length + termNotes.length}</span>
-                  ) : null}
-                </>,
-              content: (
-                <>
         <StepCard title="Write a note" meta="a note is locked once kept; a change keeps the earlier wording">
           <div className="notes-input">
             <input
@@ -1339,45 +1298,6 @@ export function NotesView({ entry, tz }: { entry: EntryDetail; tz: string }) {
             </div>
           )}
         </StepCard>
-                </>
-              ),
-            },
-            {
-              key: "system",
-              label: <>
-                  Kept by the system
-                  {system.length ? <span className="n">{system.length}</span> : null}
-                </>,
-              content: (
-                <>
-        <StepCard title="Kept by the system" meta="the words typed with each act — a park, a decline, a change, the guest's answer" quiet>
-          {trace.isLoading ? (
-            <p className="meta">Reading the record…</p>
-          ) : system.length === 0 ? (
-            <p className="meta" style={{ margin: 0 }}>Nothing yet.</p>
-          ) : (
-            <div className="reqlist">
-              {system.map(({ ev, said }) => (
-                <div key={ev.id} className="reqrow sys">
-                  <div className="req-main">
-                    <span>
-                      {traceWords(ev)} — “{said}”
-                    </span>
-                    <div className="meta">
-                      {fmtStamp(ev.timestamp, tz)}
-                      {ev.actorName && ev.actorName !== "SYSTEM" ? ` · ${ev.actorName}` : " · system"}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-        </StepCard>
-                </>
-              ),
-            },
-          ]}
-        />
       </div>
     </>
   );
