@@ -124,6 +124,13 @@ const listSelect = {
     take: 1,
     select: { id: true, amountOwed: true, guestWords: true, requestedAt: true },
   },
+  // A charge on a settled bill the desk asks the FOM to correct (2026-11-26).
+  chargeCorrectionRequests: {
+    where: { status: "REQUESTED" },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, reason: true, requestedAt: true },
+  },
   negotiationAmendmentRequests: {
     where: { state: "REQUESTED" as const },
     orderBy: { requestedAt: "desc" as const },
@@ -594,7 +601,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "LEAVE_OWING_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "LEAVE_OWING_ASKED" | "CHARGE_CORRECTION_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -605,6 +612,7 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
   "NOTIFICATION.LEAVE_OWING_REQUESTED": "LEAVE_OWING_ASKED",
+  "NOTIFICATION.CHARGE_CORRECTION_REQUESTED": "CHARGE_CORRECTION_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
   "NOTIFICATION.BLOCK_TIME_ENDED": "BLOCK_ENDED",
   "NOTIFICATION.REFUND_DUE": "REFUND_DUE",
@@ -620,6 +628,28 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
  * it concerns as that booking stands NOW (so the desk can say whether it has moved on). Read-only;
  * the trace is the record and nothing here changes it.
  */
+/**
+ * What waits for the FOM, GM or an admin right now (2026-11-26, operator: "when front desk asks for
+ * permission, the notification on FOM or higher doesn't update unless I refresh the tab"). A small
+ * list the bell asks for every few seconds; when it changes the bell reads the bookings again.
+ */
+export async function listWaitingForFom(prisma: Db) {
+  const live = { status: "ACTIVE" as const };
+  const [owing, corrections, changes, payLater] = await Promise.all([
+    prisma.leaveOwingRequest.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.chargeCorrectionRequest.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.negotiationAmendmentRequest.findMany({ where: { state: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.checkInPaymentDeferral.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+  ]);
+  const items = [
+    ...owing.map((r) => ({ kind: "LEAVE_OWING" as const, ...r })),
+    ...corrections.map((r) => ({ kind: "CHARGE_CORRECTION" as const, ...r })),
+    ...changes.map((r) => ({ kind: "NEGOTIATION_CHANGE" as const, ...r })),
+    ...payLater.map((r) => ({ kind: "PAY_LATER" as const, ...r })),
+  ].map((r) => ({ kind: r.kind, id: r.id, entryId: r.entryId, requestedAt: r.requestedAt.toISOString() }));
+  return { items, key: items.map((i) => `${i.kind}:${i.id}`).sort().join("|") };
+}
+
 export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limit?: number }) {
   const limit = Math.min(Math.max(Math.trunc(q.limit ?? DESK_ALERTS_MAX), 1), DESK_ALERTS_MAX);
   const rows = await prisma.traceEvent.findMany({
@@ -674,6 +704,8 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
               ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
               : r.eventType === "NOTIFICATION.LEAVE_OWING_REQUESTED"
                 ? { kind: "LEAVE_OWING", remaining: num(p.amountOwed), remindersSent: null, dueBy: null, billed: false }
+              : r.eventType === "NOTIFICATION.CHARGE_CORRECTION_REQUESTED"
+                ? { kind: "CHARGE_CORRECTION", remaining: num(p.netAfter), remindersSent: null, dueBy: null, billed: false }
               : r.eventType === "NOTIFICATION.REFUND_DUE"
                 ? { kind: "REFUND", remaining: num(p.amount), remindersSent: null, dueBy: null, billed: false }
               : null,

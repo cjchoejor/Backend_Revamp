@@ -20,6 +20,8 @@ import {
   setExpectedArrivalRequestSchema,
   checkInPaymentDeferralRequestSchema,
   leaveOwingAskRequestSchema,
+  chargeCorrectionAskRequestSchema,
+  chargeCorrectionDecideRequestSchema,
   leaveOwingDecideRequestSchema,
   checkInPaymentDecisionRequestSchema,
   checkInPaymentWithdrawRequestSchema,
@@ -1408,6 +1410,54 @@ entriesRouter.get("/:id/checkin-payment", requireActorLevel("L1"), async (req, r
     res.setHeader("Cache-Control", "no-store");
     const { readCheckInPayment } = await import("../../services/domain/checkin-payment-service.js");
     res.json(await readCheckInPayment(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * A charge on a settled bill corrected at the desk's ask (2026-11-26): where the asks stand (L1,
+ * no-store), the desk's ask (L1), the FOM's decision (L2 — approving posts the correction), the desk
+ * taking it back (L1).
+ */
+entriesRouter.get("/:id/charge-corrections", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readChargeCorrections } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(await readChargeCorrections(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections", requireActorLevel("L1"), validateBody(chargeCorrectionAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.status(201).json(
+      await askChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, ...req.body }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections/:requestId/decide", requireActorLevel("L2"), validateBody(chargeCorrectionDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(
+      await decideChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
+        entryId: req.params.id,
+        requestId: req.params.requestId,
+        decision: req.body.decision,
+        note: req.body.note ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(await withdrawChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, requestId: req.params.requestId }));
   } catch (e) {
     next(e);
   }

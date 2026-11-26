@@ -19,6 +19,7 @@ import {
   deskTimersFor,
   listDeskActivity,
   listDeskAlerts,
+  listWaitingForFom,
   listDeskBookings,
   listStaffNames,
 } from "../../services/domain/desk-read-service.js";
@@ -127,6 +128,15 @@ const alertsQuery = z.object({
  * notifications page's second tab. Front desk and up: these alerts are routed to the front desk as
  * well as the FOM and GM, and each says who it was for.
  */
+/** What waits for the FOM right now (2026-11-26) — the bell asks every few seconds. */
+deskRouter.get("/waiting-for-fom", L1, async (_req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await listWaitingForFom(prisma));
+  } catch (e) {
+    next(e);
+  }
+});
+
 deskRouter.get("/alerts", L1, async (req, res, next) => {
   try {
     const parsed = alertsQuery.safeParse(req.query);

@@ -536,7 +536,12 @@ export async function correctCharge(
     correctionDate: string;
   },
   /** The verified session's level (2026-11-26): a settled bill is corrected by the FOM and above. */
-  opts?: { actorLevel?: string | null },
+  opts?: {
+    actorLevel?: string | null;
+    /** Run in the correction's own transaction once it is posted (2026-11-26): the FOM approving a
+     *  desk's request marks it approved in the same transaction, so the two can never disagree. */
+    onPostedTx?: (tx: Prisma.TransactionClient, line: { id: string }, outcome: unknown) => Promise<void>;
+  },
 ) {
   if (!input.originalFolioLineId?.trim()) throw new ValidationError("originalFolioLineId is required");
   if (!input.reason?.trim()) throw new ValidationError("reason is required");
@@ -743,7 +748,10 @@ export async function correctCharge(
     }
 
     await recomputeFolioOutstandingBalance(tx, folioId);
-    if (!afterSettlement) return correctionLine;
+    if (!afterSettlement) {
+      if (opts?.onPostedTx) await opts.onPostedTx(tx, correctionLine, null);
+      return correctionLine;
+    }
     const outcome = await afterSettledCorrectionTx(tx, {
       folioId,
       entryId: entry.id,
@@ -756,6 +764,7 @@ export async function correctCharge(
       reason: input.reason.trim(),
       actor: { actorId, actorLevel: opts?.actorLevel ?? "L2" },
     });
+    if (opts?.onPostedTx) await opts.onPostedTx(tx, correctionLine, outcome);
     return { ...correctionLine, afterSettlement: outcome };
   });
 }

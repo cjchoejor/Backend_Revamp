@@ -563,6 +563,17 @@ export async function buildHistoryFacts(
         ]);
         break;
       }
+      // A charge on a settled bill the desk asked the FOM to correct (2026-11-26).
+      case "CHARGE_CORRECTION.REQUESTED":
+        put(ev.id, [
+          p.charge ? `Charge: ${String(p.charge)}` : null,
+          p.netBefore != null && p.netAfter != null ? `Net ${money(p.netBefore)} → ${money(p.netAfter)}, its service charge and GST with it` : null,
+          p.reason ? `Why: "${String(p.reason)}"` : null,
+        ]);
+        break;
+      case "CHARGE_CORRECTION.REJECTED":
+        put(ev.id, [p.note ? `Why: "${String(p.note)}"` : null]);
+        break;
       // Leaving owing at Check-out, asked of the FOM (2026-11-26).
       case "LEAVE_OWING.REQUESTED":
         put(ev.id, [

@@ -1289,6 +1289,7 @@ model Entry {
   interimPaymentRequests       InterimPaymentRequest[]
   checkInPaymentDeferrals      CheckInPaymentDeferral[]
   leaveOwingRequests           LeaveOwingRequest[]
+  chargeCorrectionRequests     ChargeCorrectionRequest[]
   stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
@@ -2014,10 +2015,11 @@ model Folio {
   writeOffRecords         WriteOffRecord[]
   billingModelTransitions BillingModelTransitionRecord[]
 
-  interimPaymentRequests  InterimPaymentRequest[]
-  checkInPaymentDeferrals CheckInPaymentDeferral[]
-  leaveOwingRequests      LeaveOwingRequest[]
-  advanceApplications     AdvanceApplication[]
+  interimPaymentRequests   InterimPaymentRequest[]
+  checkInPaymentDeferrals  CheckInPaymentDeferral[]
+  leaveOwingRequests       LeaveOwingRequest[]
+  chargeCorrectionRequests ChargeCorrectionRequest[]
+  advanceApplications      AdvanceApplication[]
 
   @@map("folios")
 }
@@ -3309,6 +3311,45 @@ model LeaveOwingRequest {
 
   @@index([entryId, status])
   @@map("leave_owing_requests")
+}
+
+/// The front desk asks the FOM to correct a charge on a settled bill (2026-11-26, operator: "if front
+/// desk wants to do it, it should ask the FOM for permission … and they approve it from
+/// notification or do it by themselves"). Approving runs the correction itself (`correctCharge`),
+/// in the same transaction that marks the request approved.
+model ChargeCorrectionRequest {
+  id               String    @id @default(uuid())
+  entryId          String
+  folioId          String
+  /// The charge line to correct.
+  originalLineId   String
+  /// ADJUST (by `value`, signed) · SET_NET (the charge's net becomes `value`).
+  mode             String
+  value            Decimal   @db.Decimal(15, 2)
+  /// The charge's net when the desk asked (the original and every earlier correction of it).
+  netBefore        Decimal   @db.Decimal(15, 2)
+  reason           String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status           String    @default("REQUESTED")
+  requestedBy      String
+  requestedLevel   String?
+  requestedAt      DateTime  @default(now())
+  decisionNote     String?
+  decidedBy        String?
+  decidedLevel     String?
+  decidedAt        DateTime?
+  /// The correction line the approval posted.
+  correctionLineId String?
+  /// What followed it (settled-correction-service): the refund due, a voucher reduced, invoices replaced.
+  outcome          Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("charge_correction_requests")
 }
 
 /// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.
