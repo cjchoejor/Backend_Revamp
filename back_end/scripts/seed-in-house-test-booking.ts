@@ -114,6 +114,8 @@ async function clean() {
   await prisma.interimPaymentRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.stayExtensionRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.advanceApplication.deleteMany({ where: { folioId: { in: folioIds } } });
+  // A credit extension approved on the fixture (2026-11-26).
+  await prisma.creditExtensionCeilingRecord.deleteMany({ where: { OR: [{ folioId: { in: folioIds } }, { entryId: { in: ids } }] } });
   // Invoice lines point at their invoice (FK) — a fixture that reached a tax invoice left them.
   await prisma.invoiceLine.deleteMany({ where: { invoice: { entryId: { in: ids } } } });
   await prisma.invoice.deleteMany({ where: { entryId: { in: ids } } });
