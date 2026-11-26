@@ -1,3 +1,4 @@
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import { s3ReEntryRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
@@ -78,7 +79,7 @@ import { listEntryCommunications } from "../../services/domain/communication-ack
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
 import { previewEarlyDeparture } from "../../services/domain/early-departure-service.js";
 import { listRoomDepartures, recordLeavingEarly, releaseScheduledRoomDeparture } from "../../services/domain/rooms-leaving-early-service.js";
-import { addRoomToStay, previewAddRoom } from "../../services/domain/add-room-to-stay-service.js";
+import { addRoomsToStay, discardPendingGuestRows, previewAddRoom } from "../../services/domain/add-room-to-stay-service.js";
 import { buildQuotationPreview, buildTripQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
@@ -93,9 +94,12 @@ import {
   stayExtensionNowRequestSchema,
   earlyDeparturePreviewRequestSchema,
   earlyDepartureRequestSchema,
+  roomRemovalAskRequestSchema,
+  roomRemovalDecideRequestSchema,
   roomDepartureReleaseRequestSchema,
   addRoomPreviewRequestSchema,
   addRoomRequestSchema,
+  addRoomDiscardGuestsRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
 import {
   commitStayExtension,
@@ -459,7 +463,7 @@ entriesRouter.post("/:id/early-departure/preview", requireActorLevel("L1"), vali
   }
 });
 
-entriesRouter.post("/:id/early-departure", requireActorLevel("L3"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/early-departure", requireActorLevel("L1"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
     // The whole booking, or some rooms (2026-11-26) — whichever the rooms named come to.
@@ -471,8 +475,50 @@ entriesRouter.post("/:id/early-departure", requireActorLevel("L3"), validateBody
         reason: req.body.reason,
         waiveFee: req.body.waiveFee === true,
         waiveReason: req.body.waiveReason ?? null,
+        kind: req.body.kind ?? "LEAVING",
       }),
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Removing a room booked by mistake (2026-11-26): the asks on the booking (L1), the desk's ask (L1),
+ * the decision (whoever the admin console lets — approving IS removing), the desk taking it back (L1).
+ */
+entriesRouter.get("/:id/room-removals", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readRoomRemovals } = await import("../../services/domain/room-removal-request-service.js");
+    res.json(await readRoomRemovals(prisma, req.params.id, req.actor!.level));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals", requireActorLevel("L1"), validateBody(roomRemovalAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askToRemoveRoom } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.status(201).json(await askToRemoveRoom(prisma, actor, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals/:requestId/decide", requireActorLevel("L1"), validateBody(roomRemovalDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideRoomRemoval } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await decideRoomRemoval(prisma, actor, req.params.id, req.params.requestId, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawRoomRemoval } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawRoomRemoval(prisma, actor, req.params.id, req.params.requestId));
   } catch (e) {
     next(e);
   }
@@ -488,30 +534,39 @@ entriesRouter.get("/:id/room-departures", requireActorLevel("L1"), async (req, r
   }
 });
 
-/** A room added to a stay in house — the rooms free and their rates (2026-11-26). */
+/** Rooms added to the booking on its check-in day (2026-11-26): the house over the stay, the party, who may. */
 entriesRouter.post("/:id/add-room/preview", requireActorLevel("L1"), validateBody(addRoomPreviewRequestSchema), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await previewAddRoom(prisma, req.params.id, { startDate: req.body.startDate ?? null }));
+    res.json(await previewAddRoom(prisma, req.params.id, req.actor!.level));
   } catch (e) {
     next(e);
   }
 });
 
-/** A room added to a stay in house, as a stay of its own on the enquiry — the GM's or an admin's. */
-entriesRouter.post("/:id/add-room", requireActorLevel("L3"), validateBody(addRoomRequestSchema), async (req, res, next) => {
+/** The rooms join the booking for the whole stay, priced on the desk's table — whoever the admin console lets. */
+entriesRouter.post("/:id/add-room", requireActorLevel("L1"), validateBody(addRoomRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
     res.json(
-      await addRoomToStay(prisma, actor, req.params.id, {
-        roomId: req.body.roomId,
-        startDate: req.body.startDate ?? null,
+      await addRoomsToStay(prisma, actor, req.params.id, {
+        roomIds: req.body.roomIds,
         adults: req.body.adults,
         childAges: req.body.childAges ?? [],
-        mealPlan: req.body.mealPlan,
-        reason: req.body.reason,
+        roomCompositions: req.body.roomCompositions,
+        reason: req.body.reason ?? null,
       }),
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The new guests' rows written while adding a room, taken back when the desk leaves it (L1). */
+entriesRouter.post("/:id/add-room/discard-guests", requireActorLevel("L1"), validateBody(addRoomDiscardGuestsRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await discardPendingGuestRows(prisma, actor, req.params.id, req.body.subjectKeys));
   } catch (e) {
     next(e);
   }
@@ -1215,10 +1270,12 @@ entriesRouter.post("/:id/change-stay", requireActorLevel("L2"), validateBody(cha
  */
 entriesRouter.post(
   "/:id/negotiation-amendment-requests/:requestId/decide",
-  requireActorLevel("L2"),
+  requireActorLevel("L1"),
   validateBody(decideNegotiationAmendmentRequestSchema),
   async (req, res, next) => {
     try {
+      // Who decides is the admin console's (2026-11-26, approvals.negotiationChange.roles).
+      await enforceMayApprove(prisma, "NEGOTIATION_CHANGE", req.actor!.level);
       const result = await decideNegotiationAmendmentRequest(
         prisma,
         req.params.id,
@@ -1496,7 +1553,7 @@ entriesRouter.post("/:id/charge-corrections", requireActorLevel("L1"), validateB
     next(e);
   }
 });
-entriesRouter.post("/:id/charge-corrections/:requestId/decide", requireActorLevel("L2"), validateBody(chargeCorrectionDecideRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/charge-corrections/:requestId/decide", requireActorLevel("L1"), validateBody(chargeCorrectionDecideRequestSchema), async (req, res, next) => {
   try {
     const { decideChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
     res.json(
@@ -1541,7 +1598,7 @@ entriesRouter.post("/:id/leave-owing", requireActorLevel("L1"), validateBody(lea
     next(e);
   }
 });
-entriesRouter.post("/:id/leave-owing/:requestId/decide", requireActorLevel("L2"), validateBody(leaveOwingDecideRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/leave-owing/:requestId/decide", requireActorLevel("L1"), validateBody(leaveOwingDecideRequestSchema), async (req, res, next) => {
   try {
     const { decideLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
     res.json(
@@ -1578,7 +1635,7 @@ entriesRouter.post("/:id/checkin-payment/deferral", requireActorLevel("L1"), val
 });
 
 /** The FOM decides — let them pay later, or turn it down (L2+). */
-entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L2"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L1"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
   try {
     const { decideCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };

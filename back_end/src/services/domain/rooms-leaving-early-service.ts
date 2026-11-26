@@ -6,7 +6,8 @@ import { requireActiveMode } from "../../lib/mode-registry-runtime.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { hotelTodayUtc, ymdUtc } from "../../lib/stay-dates.js";
-import { enforceEarlyDepartureAuthority, enforceSleptNightsAuditedForEarlyDeparture } from "../../policies/14-cancellation/p36-early-departure.js";
+import { enforceSleptNightsAuditedForEarlyDeparture } from "../../policies/14-cancellation/p36-early-departure.js";
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import { computeEarlyDepartureFigures, recordEarlyDeparture, type EarlyDepartureFigures } from "./early-departure-service.js";
 import { postCharge } from "./s7-folio-lines-service.js";
 import { releaseRoomFromStayTx, scheduleCleaningAfterLeaving } from "./room-early-departure-service.js";
@@ -38,6 +39,13 @@ import { returnRoomKey } from "./room-key-service.js";
 
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 type Billing = "TOGETHER" | "OWN";
+/**
+ * LEAVING — the guest leaves early, by their choice: the hotel's early-departure fee applies.
+ * REMOVED — the hotel booked the room by mistake (2026-11-26, operator: "removing room is usually when
+ * the hotel makes the mistake"): the room comes off the stay with no fee, its charges stay with the
+ * booking, and the front desk asks the FOM, the GM or an admin (approvals.roomRemove.roles).
+ */
+export type DepartureKind = "LEAVING" | "REMOVED";
 
 export type RoomsLeavingOutcome = {
   scope: "ROOMS";
@@ -69,8 +77,11 @@ export async function recordLeavingEarly(
   prisma: PrismaClient,
   actor: Actor,
   entryId: string,
-  input: { departureDate?: string | null; roomIds?: string[] | null; billing?: Billing | null; reason: string; waiveFee?: boolean; waiveReason?: string | null },
+  input: { departureDate?: string | null; roomIds?: string[] | null; billing?: Billing | null; reason: string; waiveFee?: boolean; waiveReason?: string | null; kind?: DepartureKind },
 ) {
+  if (input.kind === "REMOVED") {
+    return recordRoomsLeavingEarly(prisma, actor, entryId, { ...input, roomIds: input.roomIds ?? [], billing: "TOGETHER", kind: "REMOVED" });
+  }
   const peek = await computeEarlyDepartureFigures(prisma, entryId, { departureDate: input.departureDate ?? null, roomIds: input.roomIds ?? null });
   if (peek.scope === "BOOKING") {
     return { scope: "BOOKING" as const, ...(await recordEarlyDeparture(prisma, actor, entryId, input)) };
@@ -82,18 +93,29 @@ export async function recordRoomsLeavingEarly(
   prisma: PrismaClient,
   actor: Actor,
   entryId: string,
-  input: { departureDate?: string | null; roomIds: string[]; billing: Billing; reason: string; waiveFee?: boolean; waiveReason?: string | null },
+  input: { departureDate?: string | null; roomIds: string[]; billing: Billing; reason: string; waiveFee?: boolean; waiveReason?: string | null; kind?: DepartureKind },
 ): Promise<RoomsLeavingOutcome> {
-  enforceEarlyDepartureAuthority({ actorLevel: actor.actorLevel });
+  const removed = input.kind === "REMOVED";
+  // Who may is the admin console's (2026-11-26).
+  await enforceMayApprove(prisma, removed ? "ROOM_REMOVE" : "LEAVING_EARLY", actor.actorLevel);
+  if (!removed && input.waiveFee) await enforceMayApprove(prisma, "WAIVE_EARLY_FEE", actor.actorLevel);
   const reason = input.reason?.trim();
-  if (!reason) throw new ValidationError("Say why the rooms leave early");
-  const waived = input.waiveFee === true;
+  if (!reason) throw new ValidationError(removed ? "Say what went wrong — why the room comes off the stay" : "Say why the rooms leave early");
+  if (removed && !input.roomIds.length) throw new ValidationError("Pick the room to remove");
+  // A removed room was the hotel's mistake: no fee is asked, so none is waived.
+  const waived = !removed && input.waiveFee === true;
   if (waived && !input.waiveReason?.trim()) throw new ValidationError("Waiving the fee needs a reason");
   if (input.billing !== "TOGETHER" && input.billing !== "OWN") throw new ValidationError("Say whether the rooms' charges stay on the booking's bill or they pay their own");
   await requireActiveMode(prisma, "EARLY_DEPARTURE");
 
   const figures = await computeEarlyDepartureFigures(prisma, entryId, { departureDate: input.departureDate ?? null, roomIds: input.roomIds });
-  if (figures.scope !== "ROOMS") throw new ValidationError("Every room the stay uses would leave — that is the whole booking leaving early");
+  if (figures.scope !== "ROOMS") {
+    throw new ValidationError(
+      removed
+        ? "Every room the stay uses would come off — keep at least one room, or record the whole booking leaving early"
+        : "Every room the stay uses would leave — that is the whole booking leaving early",
+    );
+  }
   const hard = figures.blockers.find((b) => b.code !== "NIGHT_AUDITS_INCOMPLETE");
   if (hard) {
     if (hard.code === "DEPARTURE_DATE") throw new ValidationError(hard.message);
@@ -147,7 +169,7 @@ export async function recordRoomsLeavingEarly(
         slept = Math.max(slept, r.sleptNights);
       }
       const last = rows.map((r) => r.endDate).sort().at(-1)!;
-      const feeAmount = waived ? new Prisma.Decimal(0) : fee;
+      const feeAmount = waived || removed ? new Prisma.Decimal(0) : fee;
       const id = await allocateReadableId(tx, "EARLY_DEPARTURE" as const, now);
       await tx.roomDepartureRecord.create({
         data: {
@@ -164,7 +186,10 @@ export async function recordRoomsLeavingEarly(
           forgoneTotal: forgoneTot,
           frozenSubtotalBefore: before.sub,
           frozenTotalBefore: before.tot,
-          feeBasis: { ...ruleBasis, computedAmount: fee.toFixed(2), waived, waiveReason: waived ? input.waiveReason!.trim() : null } as Prisma.InputJsonValue,
+          feeBasis: (removed
+            ? { removed: true, note: "Removed by the hotel — no early-departure fee" }
+            : { ...ruleBasis, computedAmount: fee.toFixed(2), waived, waiveReason: waived ? input.waiveReason!.trim() : null }) as Prisma.InputJsonValue,
+          kind: removed ? "REMOVED" : "LEAVING",
           feeAmount,
           feeWaived: waived,
           billing: input.billing,
@@ -185,7 +210,7 @@ export async function recordRoomsLeavingEarly(
           inquiryId: entry.inquiryId,
           actorId: actor.actorId,
           actorLevel: actor.actorLevel,
-          reason: `Left early — ${reason}`,
+          reason: removed ? `Removed from the stay — ${reason}` : `Left early — ${reason}`,
           payload: { recordId: id, departureDate: figures.departureDate, sleptNights: slept, unstayedNights: unstayed, forgoneTotal: forgoneTot.toFixed(2), billing: input.billing },
         });
       }
@@ -202,7 +227,7 @@ export async function recordRoomsLeavingEarly(
     }
     await tx.traceEvent.create({
       data: {
-        eventType: "ENTRY.ROOMS_LEAVING_EARLY",
+        eventType: removed ? "ENTRY.ROOMS_REMOVED" : "ENTRY.ROOMS_LEAVING_EARLY",
         actorId: actor.actorId,
         actorLevel: actor.actorLevel,
         entityType: "Entry",
@@ -222,6 +247,7 @@ export async function recordRoomsLeavingEarly(
           feeBasis: figures.fee.rule.basis,
           reason,
           mode: "EARLY_DEPARTURE",
+          kind: removed ? "REMOVED" : "LEAVING",
         },
         createdBy: actor.actorId,
       },
@@ -275,7 +301,7 @@ export async function recordRoomsLeavingEarly(
       entryId,
       actorId: actor.actorId,
       actorLevel: actor.actorLevel,
-      reason: `Room${made.length > 1 ? "s" : ""} ${made.map((m) => m.roomNumber).join(", ")} left early — tonight is not charged for ${made.length > 1 ? "them" : "it"}`,
+      reason: `Room${made.length > 1 ? "s" : ""} ${made.map((m) => m.roomNumber).join(", ")} ${removed ? "came off the stay" : "left early"} — tonight is not charged for ${made.length > 1 ? "them" : "it"}`,
     });
   }
 
@@ -300,6 +326,7 @@ export async function listRoomDepartures(prisma: PrismaClient, entryId: string) 
     waiveReason: ((r.feeBasis ?? {}) as { waiveReason?: string | null }).waiveReason ?? null,
     feeLineId: r.feeFolioLineId,
     billing: r.billing as Billing,
+    kind: (r.kind === "REMOVED" ? "REMOVED" : "LEAVING") as DepartureKind,
     state: r.state as "SCHEDULED" | "LEFT",
     /** A scheduled room whose day has come — the desk releases it now. */
     dueToday: r.state === "SCHEDULED" && ymdUtc(r.departureDate) <= today,

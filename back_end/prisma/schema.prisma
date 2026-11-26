@@ -1298,7 +1298,8 @@ model Entry {
   bookingNotes                 BookingNote[]
   guestRequests                GuestRequest[]
   earlyDeparture               EarlyDepartureRecord?
-  roomDepartures            RoomDepartureRecord[]
+  roomDepartures               RoomDepartureRecord[]
+  roomRemovalRequests          RoomRemovalRequest[]
   writeOffRecords              WriteOffRecord[]
   followUpTasks                FollowUpTaskRecord[]
   communications               CommunicationRecord[]
@@ -3691,6 +3692,8 @@ model RoomDepartureRecord {
   feeFolioLineId       String?
   /// TOGETHER — the room's charges stay on the booking's bill; OWN — the room pays its share when it leaves.
   billing              String
+  /// LEAVING — the guest leaves early (the fee applies); REMOVED — the hotel booked it by mistake (no fee).
+  kind                 String    @default("LEAVING")
   /// SCHEDULED — leaves on a later day; LEFT — the room was released.
   state                String    @default("SCHEDULED")
   leftAt               DateTime?
@@ -3704,6 +3707,35 @@ model RoomDepartureRecord {
 
   @@index([entryId, state])
   @@map("room_departure_records")
+}
+
+/// The front desk asks the FOM, the GM or an admin to remove a room booked by mistake (2026-11-26).
+/// Approving runs the removal as the approver; the records it made are named.
+model RoomRemovalRequest {
+  id             String    @id @default(uuid())
+  entryId        String
+  roomIds        String[]
+  roomNumbers    String[]
+  departureDate  DateTime
+  /// What went wrong, in the desk's words.
+  reason         String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status         String    @default("REQUESTED")
+  requestedBy    String
+  requestedLevel String?
+  requestedAt    DateTime  @default(now())
+  decidedBy      String?
+  decidedLevel   String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  recordIds      String[]  @default([])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("room_removal_requests")
 }
 
 model EarlyDepartureRecord {

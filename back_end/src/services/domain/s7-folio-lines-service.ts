@@ -1,3 +1,4 @@
+import { readApprovalRoles } from "../../lib/approval-roles.js";
 import { FolioLineType, FolioState, Prisma, Stage, type PrismaClient } from "@prisma/client";
 import { allocateFolioLineId } from "../../lib/readable-id.js";
 import { MissingConfigurationError, NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -582,7 +583,14 @@ export async function correctCharge(
   // sealed, and what follows (the voucher, the refund, the tax invoice) is settled-correction-service's.
   const afterSettlement = folio.state !== FolioState.LIVE;
   if (afterSettlement) {
-    enforceSettledCorrectionAllowed({ folioState: folio.state, entryStatus: entry.status, entryStage: entry.currentStage, actorLevel: opts?.actorLevel });
+    const who = await readApprovalRoles(prisma as never, "CHARGE_CORRECTION");
+    enforceSettledCorrectionAllowed({
+      folioState: folio.state,
+      entryStatus: entry.status,
+      entryStage: entry.currentStage,
+      actorLevel: opts?.actorLevel,
+      approvers: { may: who.levels.includes((opts?.actorLevel ?? "L1") as never), words: who.words },
+    });
   } else {
     enforceFolioLiveForS7ChargePosting({ folioState: folio.state });
     // Corrections follow the same stage envelope as posting (2026-08-03): the checkout review

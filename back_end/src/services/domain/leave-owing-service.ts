@@ -16,6 +16,7 @@
  * credit extension the FOM records by hand (`recordCreditExtensionApproval`) — so the settle card
  * then offers "Settle — leave it owing" to whoever is at the desk. Nothing here moves money.
  */
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -25,7 +26,6 @@ import { recordCreditExtensionApproval } from "./s3-payment-service.js";
 type Db = PrismaClient;
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
 
-const isFom = (l: string) => l === "L2" || l === "L3" || l === "L4";
 
 const ROW_SELECT = {
   id: true,
@@ -218,9 +218,8 @@ export async function decideLeaveOwing(
   actor: Actor,
   input: { entryId: string; requestId: string; decision: "APPROVE" | "REJECT"; note?: string | null; payWithinDays?: number | null },
 ) {
-  if (!isFom(actor.actorLevel)) {
-    throw new PolicyGateBlockedError("AUTH_REQUIRED_L2", "Letting a guest leave owing is the FOM's call — an FOM, the GM or an admin decides it");
-  }
+  // Who decides is the admin console's (2026-11-26, approvals.leaveOwing.roles).
+  await enforceMayApprove(prisma as never, "LEAVE_OWING", actor.actorLevel);
   const note = input.note?.trim() || null;
   const entry = await loadEntry(prisma, input.entryId);
   const standing = await readLeaveOwing(prisma, input.entryId);

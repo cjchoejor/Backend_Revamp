@@ -1,3 +1,4 @@
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import { waitingRefundTotal } from "../../lib/refund-money.js";
 import type { PrismaClient } from "@prisma/client";
 import { PaymentDirection, Prisma, Stage } from "@prisma/client";
@@ -34,7 +35,6 @@ type Db = PrismaClient;
 export type CheckInPayBy = "DURING_STAY" | "AT_CHECKOUT" | "AFTER_STAY";
 const PAY_BY = new Set<CheckInPayBy>(["DURING_STAY", "AT_CHECKOUT", "AFTER_STAY"]);
 const REMINDER_TIMER_CODE = "CHECKIN_PAYMENT_REMINDER_W42" as const;
-const isFom = (level: string) => level === "L2" || level === "L3" || level === "L4";
 
 export function nuWords(v: Prisma.Decimal | number): string {
   return `Nu ${Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -287,9 +287,8 @@ export async function decideCheckInPaymentDeferral(
   actor: Actor,
   input: { entryId: string; requestId?: string | null; decision: "APPROVE" | "REJECT"; payBy?: CheckInPayBy | null; dueBy?: string | null; note?: string | null },
 ) {
-  if (!isFom(actor.actorLevel)) {
-    throw new PolicyGateBlockedError("AUTH_REQUIRED_L2", "Letting the guest pay later is the FOM's call — an FOM, the GM or an admin decides it");
-  }
+  // Who decides is the admin console's (2026-11-26, approvals.checkInPayLater.roles).
+  await enforceMayApprove(prisma as never, "CHECKIN_PAY_LATER", actor.actorLevel);
   const note = input.note?.trim() || null;
   const entry = await loadEntry(prisma, input.entryId);
   assertBeforeCheckIn(entry);

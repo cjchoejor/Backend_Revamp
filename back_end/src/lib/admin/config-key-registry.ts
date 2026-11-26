@@ -1,3 +1,4 @@
+import { APPROVAL_KEYS, approvalRolesProblem } from "../approval-roles.js";
 /**
  * ACIG §6.2.25 / §9 — typed validator + ownership registry for keyed configuration.
  *
@@ -138,6 +139,10 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // Who else may mark the money reconciled; the GM and admins always can (2026-11-05).
   "advancePayment.reconciliation.alsoAllowed": own("FinancialConfigurationService", (value) =>
     Array.isArray(value) && value.every((v) => v === "L1" || v === "L2") ? null : "must be a list of L1 and L2",
+  ),
+  // Who may approve what (2026-11-26; lib/approval-roles.ts) — { L1, L2, L3 } true or false, an admin always may.
+  ...Object.fromEntries(
+    APPROVAL_KEYS.map((k) => [k, own("ConfigurationService", approvalRolesProblem)]),
   ),
   // The banks a card, QR, transfer or remittance can go through (2026-11-12; lib/payment-bank.ts).
   "payment.banks": own("FinancialConfigurationService", (value) =>

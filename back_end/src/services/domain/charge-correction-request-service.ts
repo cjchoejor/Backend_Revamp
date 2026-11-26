@@ -15,6 +15,7 @@
  * The request shows in the FOM's and GM's bell (`attentionItems` reads it off the desk list) and in
  * Alerts sent (the NOTIFICATION trace). Nothing here moves money until the FOM approves.
  */
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import { Prisma, type PrismaClient } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { classifyFolioLine, CORRECTION_LINE_PREFIX } from "../../lib/folio-tax-lines.js";
@@ -24,7 +25,6 @@ import { SETTLED_FOLIO_STATES } from "./settled-correction-service.js";
 
 type Db = PrismaClient;
 type Actor = { actorId: string; actorLevel: "L1" | "L2" | "L3" | "L4" };
-const isFom = (l: string) => l === "L2" || l === "L3" || l === "L4";
 
 async function loadEntry(prisma: Db, entryId: string) {
   const entry = await prisma.entry.findUnique({
@@ -223,9 +223,8 @@ export async function decideChargeCorrection(
   actor: Actor,
   input: { entryId: string; requestId: string; decision: "APPROVE" | "REJECT"; note?: string | null },
 ) {
-  if (!isFom(actor.actorLevel)) {
-    throw new PolicyGateBlockedError("AUTH_REQUIRED_L2", "Correcting a charge once a share is settled is the FOM's — an FOM, the GM or an admin decides it");
-  }
+  // Who decides is the admin console's (2026-11-26, approvals.chargeCorrection.roles).
+  await enforceMayApprove(prisma as never, "CHARGE_CORRECTION", actor.actorLevel);
   const row = await prisma.chargeCorrectionRequest.findUnique({ where: { id: input.requestId } });
   if (!row || row.entryId !== input.entryId) throw new NotFoundError("ChargeCorrectionRequest");
   if (row.status !== "REQUESTED") throw new PolicyGateBlockedError("NOT_OPEN", "This request has already been answered, or was taken back");

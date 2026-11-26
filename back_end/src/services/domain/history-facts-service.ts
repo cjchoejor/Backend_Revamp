@@ -352,6 +352,54 @@ export async function buildHistoryFacts(
         ]);
         break;
       }
+      // Rooms added on the check-in day, a room removed by mistake, the ask to remove one (2026-11-26).
+      case "ENTRY.ROOMS_ADDED": {
+        const nos = Array.isArray(p.roomNumbers) ? (p.roomNumbers as string[]) : [];
+        const g = (p.guestsAdded ?? {}) as { adults?: number; childAges?: number[] };
+        const pr = (p.pricing ?? {}) as { priorTotal?: unknown; newTotal?: unknown };
+        const now = (p.partyNow ?? {}) as { adultCount?: number; childAges?: number[] };
+        put(ev.id, [
+          nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(", ")} from the check-in to the check-out` : null,
+          typeof g.adults === "number"
+            ? `New guests: ${g.adults} adult${g.adults === 1 ? "" : "s"}${g.childAges?.length ? `, ${g.childAges.length === 1 ? "a child" : "children"} aged ${g.childAges.join(", ")}` : ""}`
+            : null,
+          typeof now.adultCount === "number" ? `The party now: ${now.adultCount} adult${now.adultCount === 1 ? "" : "s"}${now.childAges?.length ? `, ${now.childAges.length} child${now.childAges.length === 1 ? "" : "ren"}` : ""}` : null,
+          money(pr.priorTotal) && money(pr.newTotal) ? `The stay: ${money(pr.priorTotal)} → ${money(pr.newTotal)}` : null,
+          typeof p.quotationId === "string" ? "Priced again; the quotation, the voucher and the proforma made again and held for the desk" : null,
+          typeof p.reason === "string" && p.reason ? `Note: ${p.reason}` : null,
+        ]);
+        break;
+      }
+      case "ENTRY.ROOMS_REMOVED":
+      case "ENTRY.ROOMS_LEAVING_EARLY": {
+        const rooms = Array.isArray(p.rooms) ? (p.rooms as Array<{ roomNumber?: string; unstayedNights?: number; forgoneTotal?: unknown; feeAmount?: unknown }>) : [];
+        put(ev.id, [
+          ...rooms.map(
+            (r) =>
+              `Room ${r.roomNumber ?? "?"}: ${r.unstayedNights ?? 0} night${r.unstayedNights === 1 ? "" : "s"} not charged (${money(r.forgoneTotal) ?? "—"})${
+                ev.eventType === "ENTRY.ROOMS_REMOVED" ? " · no fee" : money(r.feeAmount) && Number(r.feeAmount) > 0 ? ` · fee ${money(r.feeAmount)} + taxes` : p.feeWaived ? " · fee waived" : ""
+              }`,
+          ),
+          day(p.departureDate) ? `${p.later ? "Leaves on" : "Off from"} ${day(p.departureDate)}` : null,
+          ev.eventType === "ENTRY.ROOMS_LEAVING_EARLY" ? (p.billing === "OWN" ? "They pay their own share" : "Their charges stay on the booking's bill") : null,
+          typeof p.reason === "string" ? `Why: ${p.reason}` : null,
+          p.feeWaived && typeof p.waiveReason === "string" ? `Fee waived: ${p.waiveReason}` : null,
+        ]);
+        break;
+      }
+      case "ROOM_REMOVAL.REQUESTED":
+      case "ROOM_REMOVAL.APPROVED":
+      case "ROOM_REMOVAL.REJECTED":
+      case "ROOM_REMOVAL.WITHDRAWN": {
+        const nos = Array.isArray(p.roomNumbers) ? (p.roomNumbers as string[]) : [];
+        put(ev.id, [
+          nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(", ")}` : null,
+          typeof p.reason === "string" ? `What went wrong: ${p.reason}` : null,
+          typeof p.approvers === "string" ? `Asked of ${p.approvers}` : null,
+          typeof p.note === "string" && p.note ? `${ev.eventType === "ROOM_REMOVAL.REJECTED" ? "Why not" : "Note"}: ${p.note}` : null,
+        ]);
+        break;
+      }
       case "INQUIRY.CALLER_UPDATED":
       case "INQUIRY.SOURCE_CHANGED": {
         const after = (p.after ?? p.to ?? p) as Record<string, unknown>;

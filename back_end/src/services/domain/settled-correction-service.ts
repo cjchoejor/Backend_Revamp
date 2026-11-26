@@ -41,6 +41,8 @@ export function enforceSettledCorrectionAllowed(input: {
   entryStatus: string;
   entryStage: string;
   actorLevel: string | null | undefined;
+  /** Who may correct a settled bill, from the admin console (2026-11-26); absent = the FOM and above. */
+  approvers?: { may: boolean; words: string } | null;
 }) {
   if (input.folioState === FolioState.WRITTEN_OFF) {
     throw new ValidationError("This bill was written off — a charge on it is no longer corrected");
@@ -57,10 +59,10 @@ export function enforceSettledCorrectionAllowed(input: {
   if (input.entryStage !== "S8" && input.entryStage !== "S9") {
     throw new ValidationError("A settled bill is corrected at Check-out or on the Closed step");
   }
-  if (!isFom(input.actorLevel)) {
+  if (input.approvers ? !input.approvers.may : !isFom(input.actorLevel)) {
     throw new PolicyGateBlockedError(
       "AUTH_REQUIRED_L2",
-      "Correcting a charge after the bill is settled is the FOM's — an FOM, the GM or an admin does it",
+      `Correcting a charge after the bill is settled is for ${input.approvers?.words ?? "the FOM, the GM or an admin"} — ask them`,
     );
   }
 }

@@ -1,3 +1,4 @@
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import type { PrismaClient } from "@prisma/client";
 import { EntryStatus, FolioLineType, FolioState, InventoryClaimState, NightAuditRunStatus, Prisma, Stage } from "@prisma/client";
 import { isBookingNightPosted } from "../application/s7-night-audit-service.js";
@@ -19,7 +20,6 @@ import { correctCharge, postCharge } from "./s7-folio-lines-service.js";
 import { resolveBillingModelForNewLine } from "../../lib/billing-model-defaults.js";
 import { progressStageS7ToS8 } from "../../state-machines/entry-lifecycle-state-machine.js";
 import {
-  enforceEarlyDepartureAuthority,
   enforceEarlyDepartureDateWithinStay,
   enforceEarlyDepartureInHouse,
   enforceSleptNightsAuditedForEarlyDeparture,
@@ -607,7 +607,9 @@ export async function recordEarlyDeparture(
   entryId: string,
   input: { departureDate?: string | null; reason: string; waiveFee?: boolean; waiveReason?: string | null },
 ): Promise<EarlyDepartureOutcome> {
-  enforceEarlyDepartureAuthority({ actorLevel: actor.actorLevel });
+  // Who may is the admin console's (2026-11-26, approvals.leavingEarly / waiveEarlyFee); GM and admin as built.
+  await enforceMayApprove(prisma, "LEAVING_EARLY", actor.actorLevel);
+  if (input.waiveFee) await enforceMayApprove(prisma, "WAIVE_EARLY_FEE", actor.actorLevel);
   if (!input.reason?.trim()) throw new ValidationError("A reason for the early departure is required");
   if (input.waiveFee && !input.waiveReason?.trim()) throw new ValidationError("Waiving the fee needs a reason");
   await requireActiveMode(prisma, "EARLY_DEPARTURE");
