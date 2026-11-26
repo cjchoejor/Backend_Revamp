@@ -121,7 +121,7 @@ export function ChargesView({
   const fo = billing?.folio ?? null;
   const tag = !billing
     ? null
-    : st?.earlyDeparture
+    : st?.earlyDeparture || st?.roomsLeaving?.length
       ? "shortened stay"
       : st?.frozen
         ? "as confirmed"
@@ -193,8 +193,16 @@ export function ChargesView({
                   Shortened: {st.earlyDeparture.sleptNights} nights slept · {money(st.earlyDeparture.forgoneRoomTotal, cur)} not charged
                 </p>
               ) : null}
+              {st.roomsLeaving?.length
+                ? st.roomsLeaving.map((r) => (
+                    <p className="meta" key={`${r.roomNumber}-${r.departureDate}`}>
+                      Room {r.roomNumber} {r.state === "LEFT" ? "left" : "leaves"} on {fmtDay(r.departureDate)} · {plural(r.unstayedNights, "night")} not slept ·{" "}
+                      {money(r.forgoneTotal, cur)} not charged
+                    </p>
+                  ))
+                : null}
               {st.quotationId ? (
-                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} shortened={!!st.earlyDeparture} currency={cur} />
+                <QuotePriceLines quotationId={st.quotationId} rooms={roomsNamed(entry, st.quotationId)} stayTotal={st.amount} shortened={!!st.earlyDeparture || !!st.roomsLeaving?.length} currency={cur} />
               ) : billing?.rooms?.length ? (
                 <table className="table compact resp" style={{ marginTop: 8 }}>
                   <thead>

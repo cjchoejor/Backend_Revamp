@@ -1869,7 +1869,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const totalKind =
     billing?.headline.kind === "BILLED_SO_FAR"
       ? "billed so far"
-      : billing?.stayTotal?.earlyDeparture
+      : billing?.stayTotal?.earlyDeparture || billing?.stayTotal?.roomsLeaving?.length
         ? "shortened stay"
         : billing?.headline.frozen
           ? "as confirmed"
@@ -2302,7 +2302,11 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 {entry.earlyDeparture ? (
                   <div className="notice inert">
                     <span className="sm">
-                      <b>Left early on {fmtDay(entry.earlyDeparture.departureDate)}</b>
+                      {/* A departure recorded for a later day is still to come (2026-11-26). */}
+                      <b>
+                        {hotelToday && entry.earlyDeparture.departureDate.slice(0, 10) > hotelToday ? "Leaves early on" : "Left early on"}{" "}
+                        {fmtDay(entry.earlyDeparture.departureDate)}
+                      </b>
                     </span>
                   </div>
                 ) : null}

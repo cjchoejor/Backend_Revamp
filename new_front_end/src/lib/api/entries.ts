@@ -614,6 +614,16 @@ export type EntryBillingSummary = {
       feeAmount: number;
       feeWaived: boolean;
     } | null;
+    /** Rooms leaving early while the rest stay (2026-11-26): `amount` is already less their nights not slept. */
+    roomsLeaving?: Array<{
+      roomNumber: string;
+      departureDate: string;
+      unstayedNights: number;
+      forgoneTotal: number;
+      feeAmount: number;
+      feeWaived: boolean;
+      state: string;
+    }>;
   };
   /** Per-room price breakdown from the stored composition (null on flat-path quotes). */
   rooms: Array<{

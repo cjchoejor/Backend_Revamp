@@ -3143,3 +3143,31 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 @media (prefers-reduced-motion: reduce) { .ds .fom-wait { animation: none; } }
+
+/* Leaving early and a room added, at Stay (2026-11-26). Rooms picked as buttons with a tick; the
+   figures in a table and one line under it; a room due to leave today amber, its Release green. */
+.ds .leaving { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .leaving-rooms { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+.ds .leaving-room { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; font-weight: 500; cursor: pointer; text-align: left; }
+.ds .leaving-room:hover:not(:disabled) { background: var(--surface-2); border-color: var(--ink-3); }
+.ds .leaving-room.on { border: 2px solid var(--accent); background: var(--accent-soft); padding: 5px 11px; }
+.ds .leaving-room:disabled { opacity: .55; cursor: not-allowed; border-style: dashed; }
+.ds .leaving-room .sm { color: var(--ink-2); font-weight: 400; }
+.ds .lr-tick { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1.5px solid var(--line-2); border-radius: 3px; font-size: 12px; font-weight: 800; color: #fff; flex-shrink: 0; }
+.ds .leaving-room.on .lr-tick { background: var(--accent); border-color: var(--accent); }
+.ds .leaving-fig { min-height: 38px; display: flex; align-items: center; font-size: var(--t-base); }
+.ds .leaving-table { margin-top: 0; }
+.ds .leaving-table .num { text-align: right; }
+.ds .leaving-sum { display: flex; flex-wrap: wrap; gap: var(--s4); justify-content: flex-end; margin: var(--s2) 0; font-size: 15px; }
+.ds .leaving-sum b { font-size: 16px; }
+.ds .leaving-waive { display: inline-flex; align-items: center; gap: 8px; margin: var(--s2) 0; font-weight: 500; cursor: pointer; }
+.ds .leaving-what { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.ds .leaving-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .leaving-row:first-child { border-top: 0; }
+.ds .leaving-row.due { border: 2px solid var(--warning); border-left-width: 6px; background: var(--warning-soft); border-radius: var(--r-control); padding: var(--s2) var(--s3); }
+.ds .leaving-row > .btn:last-child { margin-left: auto; }
+.ds .add-room-type { padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .add-room-type:first-of-type { border-top: 0; }
+.ds .add-room-type-head { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
+.ds .add-room-type-head b { font-size: 15px; }
+.ds .add-room-type .leaving-rooms { margin-top: var(--s2); }
