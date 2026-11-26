@@ -154,6 +154,8 @@ export function S9Closed({
   const open = !readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9";
   return (
     <StepCanvas past={readOnly}>
+      {/* The desk's ask to correct a charge, waiting, and the FOM's last answer — first (2026-11-26). */}
+      {tail ? <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={entry.status === "ACTIVE"} /> : null}
       <div className="pane" hidden={at(null)}>
         <DisputesCard entry={entry} tz={clock.tz} />
         <WhatTheStayWas entry={entry} />
@@ -167,8 +169,6 @@ export function S9Closed({
         <SealedPapers entry={entry} tz={clock.tz} />
         {entry.status === "CANCELLED" ? <Cancellation entry={entry} /> : null}
       </div>
-      {/* A charge the desk asked the FOM to correct — above every view (2026-11-26). */}
-      {tail ? <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={entry.status === "ACTIVE"} /> : null}
       {tail ? (
         <>
           <div className="pane" hidden={at("late")}>

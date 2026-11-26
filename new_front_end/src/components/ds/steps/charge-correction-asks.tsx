@@ -51,7 +51,21 @@ const askWords = (a: ChargeCorrectionAsk) => {
   return `${what}${where} — net ${money(a.netBefore)} → ${money(a.netAfter)}`;
 };
 
-export function ChargeCorrectionAsks({ entry, tz, live }: { entry: EntryDetail; tz: string; live: boolean }) {
+export function ChargeCorrectionAsks({
+  entry,
+  tz,
+  live,
+  mode = "step",
+}: {
+  entry: EntryDetail;
+  tz: string;
+  live: boolean;
+  /**
+   * "band": the FOM's answer, in Waiting for your answer at the top of the booking (2026-11-26).
+   * "step": on Check-out and Closed — the desk's ask waiting, and the last answer.
+   */
+  mode?: "band" | "step";
+}) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
   const qc = useQueryClient();
@@ -69,7 +83,7 @@ export function ChargeCorrectionAsks({ entry, tz, live }: { entry: EntryDetail; 
   const openCount = q.data?.open.length ?? 0;
   const seen = useRef<{ answered: string | null; open: number } | null>(null);
   useEffect(() => {
-    if (!q.data) return;
+    if (!q.data || mode !== "step") return;
     const before = seen.current;
     seen.current = { answered, open: openCount };
     if (before && (before.answered !== answered || before.open > openCount)) {
@@ -79,7 +93,7 @@ export function ChargeCorrectionAsks({ entry, tz, live }: { entry: EntryDetail; 
         else if (q.data.latest.status === "REJECTED") toast.warning(`${q.data.latest.decidedByName ?? "The FOM"} turned down the correction`);
       }
     }
-  }, [q.data, answered, openCount, fom, refresh]);
+  }, [q.data, answered, openCount, fom, refresh, mode]);
 
   const done = (standing: ChargeCorrectionStanding) => {
     qc.setQueryData(KEY(entry.id), standing);
@@ -126,17 +140,22 @@ export function ChargeCorrectionAsks({ entry, tz, live }: { entry: EntryDetail; 
     onError: (e) => toastRefusal(e, "Could not take it back"),
   });
 
-  const open = q.data?.open ?? [];
-  const latest = q.data?.latest ?? null;
+  // The FOM answers in the band at the top of the booking; the step keeps the desk's waiting ask.
+  const open = (mode === "band") === fom ? (q.data?.open ?? []) : [];
+  const latest = mode === "step" ? (q.data?.latest ?? null) : null;
   return (
     <>
       {open.map((a) => (
-        <div key={a.id} className="notice next" role="status" data-charge-ask="waiting" style={{ marginTop: 12, flexWrap: "wrap" }}>
-          <span style={{ flex: "1 1 320px" }}>
+        <div
+          key={a.id}
+          className={mode === "band" ? "fom-wait-row" : "notice next"}
+          role="status"
+          data-charge-ask="waiting"
+          style={mode === "band" ? undefined : { marginTop: 12, flexWrap: "wrap" }}
+        >
+          <span className="fom-wait-text" style={{ flex: "1 1 320px" }}>
             <b>{fom ? "The desk asks to correct a charge" : "Waiting for the FOM to correct a charge"}</b>
-            <br />
-            {askWords(a)}
-            <br />
+            <span>{askWords(a)}</span>
             <span className="sm">
               &ldquo;{a.reason}&rdquo; · asked by {a.requestedByName}, {fmtDateTime(a.requestedAt, tz)}
             </span>

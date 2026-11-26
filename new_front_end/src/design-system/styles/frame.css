@@ -3123,3 +3123,23 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .apt-rate-table tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .ds .apt-periods { margin: 4px 0 0; padding: 0; list-style: none; font-size: var(--t-sm); }
 .ds .apt-periods li { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); padding: 3px 0; border-top: 1px dashed var(--line); }
+
+/* Waiting for your answer (2026-11-26, operator: "as a user the fom can't see anything she has to work
+   with when she comes into the page, we need something prominent for such cases"): the first thing in
+   the booking's work column for the FOM, GM and admin — amber, a firm edge, a mark, one row per ask
+   with its act at the right. It arrives with one soft pulse (none under reduced motion). */
+.ds .fom-wait { border: 2px solid var(--warning); border-left-width: 6px; background: var(--warning-soft); border-radius: var(--r-card, 6px); padding: var(--s3) var(--s4); margin-bottom: var(--s4); animation: ds-fom-wait-in 1.4s ease-out 1; }
+.ds .fom-wait h3 { display: flex; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); font-size: 18px; font-weight: 700; color: var(--ink); }
+.ds .fom-wait-mark { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--warning); color: #fff; font-size: 15px; font-weight: 800; flex-shrink: 0; }
+.ds .fom-wait-n { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 12px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 700; }
+.ds .fom-wait-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s3) 0; border-top: 1px solid var(--warning-line); }
+.ds .fom-wait h3 + .fom-wait-row, .ds .fom-wait h3 + * > .fom-wait-row:first-child { border-top: 0; padding-top: var(--s1); }
+.ds .fom-wait-row > span:last-child, .ds .fom-wait-row > .btn:last-child { margin-left: auto; }
+.ds .fom-wait-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; font-size: var(--t-base); }
+.ds .fom-wait-text b { font-size: 16px; font-weight: 700; }
+@keyframes ds-fom-wait-in {
+  0% { box-shadow: 0 0 0 0 var(--warning-line); }
+  25% { box-shadow: 0 0 0 5px var(--warning-line); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .ds .fom-wait { animation: none; } }

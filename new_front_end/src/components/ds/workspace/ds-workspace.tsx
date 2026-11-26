@@ -124,6 +124,7 @@ import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES, inspectionsOwedAtClosed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
+import { WaitingForYourAnswer } from "@/components/ds/workspace/waiting-for-you";
 import { blockRoomsForReserve, declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
@@ -499,6 +500,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const setSelectedRef = useRef(setSelected);
   setSelectedRef.current = setSelected;
   const stableSetSelected = useMemo(() => (n: number) => setSelectedRef.current(n), []);
+  // The latest goToCard, for Waiting for your answer: it moves to a step, then to a card on it.
+  const goToCardRef = useRef<(card?: string) => void>(() => undefined);
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
@@ -1384,6 +1387,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     };
     window.requestAnimationFrame(attempt);
   };
+  goToCardRef.current = goToCard;
 
   const viewingPast = (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
@@ -2283,6 +2287,18 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               </div>
 
               <div className="canvas">
+                {/* What waits for the FOM's answer on this booking, first (2026-11-26). */}
+                {!sealed ? (
+                  <WaitingForYourAnswer
+                    entry={entry}
+                    row={listRow}
+                    tz={clock.tz}
+                    onGo={({ step: to, card }) => {
+                      if (to !== viewing) setSelected(to);
+                      window.setTimeout(() => goToCardRef.current(card), to !== viewing ? 250 : 0);
+                    }}
+                  />
+                ) : null}
                 {entry.earlyDeparture ? (
                   <div className="notice inert">
                     <span className="sm">

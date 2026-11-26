@@ -202,6 +202,9 @@ export function S8CheckOut({
 
   return (
     <StepCanvas past={past}>
+      {/* The desk's ask to correct a charge, waiting, and the FOM's last answer — first, on either view
+          (2026-11-26). The FOM answers in Waiting for your answer at the top of the booking. */}
+      {past ? null : <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={live} />}
       <div className="pane" hidden={at(null)}>
         {past ? null : <CheckoutAttention entry={entry} onDisputes={() => setDisputesOpen(true)} />}
         <Departure entry={entry} live={live} />
@@ -231,9 +234,6 @@ export function S8CheckOut({
           </div>
         ) : null}
       </WorkPopup>
-
-      {/* A charge the desk asked the FOM to correct — above both views, so it is read on either (2026-11-26). */}
-      {past ? null : <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={live} />}
 
       <div className="pane" hidden={at("charges")}>
         <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} correctable={correctable} target={chargeTarget} setTarget={setChargeTarget} />
