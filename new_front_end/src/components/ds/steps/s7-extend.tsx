@@ -819,7 +819,7 @@ function NewExtension({ entry, checkOut, onChanged }: { entry: EntryDetail; chec
 }
 
 /** A part's heading: its number (a tick once done), its title, and folded, its line with Edit. */
-function PartHead({
+export function PartHead({
   n,
   title,
   state,
@@ -853,7 +853,7 @@ function PartHead({
 }
 
 /** Done, at the part's bottom right: green once the part is complete, with what it waits for beside it. */
-function PartDone({ ready, why, onDone }: { ready: boolean; why: string | null; onDone: () => void }) {
+export function PartDone({ ready, why, onDone }: { ready: boolean; why: string | null; onDone: () => void }) {
   return (
     <div className="ext-go">
       {!ready && why ? <span className="meta">{why}</span> : ready ? <span className="ok-ink sm">All in — press Done to go on</span> : null}

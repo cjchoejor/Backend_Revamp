@@ -1480,6 +1480,48 @@ const VIP_CONFIG = page("/admin/vip-routing", "VIP arrivals", [
   },
 ]);
 
+// ---- who approves what (2026-11-26) ---------------------------------------------------------------
+// Operator: "where admin can configure who can do it or not with toggle of true and false". One setting
+// per act, { L1, L2, L3 } true or false; an admin always may. No saved setting is the rule as built.
+
+const ROLE_WORDS: Array<[string, string]> = [
+  ["L1", "the front desk"],
+  ["L2", "the FOM"],
+  ["L3", "the GM"],
+];
+const approval = (key: string, title: string, about: string, defaults: string[]): Draft => ({
+  key,
+  title,
+  about: `${about} An admin always may. Anyone the toggles leave out asks someone who may, where the desk offers it.`,
+  form: {
+    kind: "group",
+    label: "",
+    fields: [
+      { kind: "toggle", key: "L1", label: "Front desk", on: "May", off: "May not" },
+      { kind: "toggle", key: "L2", label: "Front office manager", on: "May", off: "May not" },
+      { kind: "toggle", key: "L3", label: "General manager", on: "May", off: "May not" },
+    ],
+  },
+  fresh: { L1: defaults.includes("L1"), L2: defaults.includes("L2"), L3: defaults.includes("L3") },
+  summary: (v) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    const who = ROLE_WORDS.filter(([k]) => (typeof o[k] === "boolean" ? o[k] === true : defaults.includes(k))).map(([, w]) => w);
+    const all = [...who, "an admin"];
+    return all.length === 1 ? "Only an admin" : `${all.slice(0, -1).join(", ")} and ${all[all.length - 1]}`.replace(/^the /, "The ");
+  },
+});
+
+const APPROVALS = page("/admin/approvals", "Who approves", [
+  approval("approvals.roomAdd.roles", "Adding a room to a stay", "On the check-in day, a room joins the booking for the whole stay with its new guests, priced on the table.", ["L3"]),
+  approval("approvals.roomRemove.roles", "Removing a room booked by mistake", "A room the hotel booked by mistake comes off the stay with no fee.", ["L2", "L3"]),
+  approval("approvals.leavingEarly.roles", "A guest leaving early", "Recording the whole booking, or some rooms, leaving before the booked check-out.", ["L3"]),
+  approval("approvals.waiveEarlyFee.roles", "Waiving the early-departure fee", "Letting a guest who leaves early off the hotel's early-departure fee.", ["L3"]),
+  approval("approvals.leaveOwing.roles", "Letting a guest leave owing", "At Check-out, the guest leaves with money still owed on the bill.", ["L2", "L3"]),
+  approval("approvals.checkInPayLater.roles", "The rest of the bill paid later", "At Check-in, a guest who said they would pay the rest then pays later instead.", ["L2", "L3"]),
+  approval("approvals.chargeCorrection.roles", "Correcting a charge on a settled bill", "A wrong charge put right after the bill, or a share of it, was settled.", ["L2", "L3"]),
+  approval("approvals.negotiationChange.roles", "Changing a booking whose quotation went out", "At Negotiation, the dates, rooms or guests changed once the quotation was sent or accepted.", ["L2", "L3"]),
+]);
+
 // ---- lookups -------------------------------------------------------------------------------------
 
 const POLICY_PAGE = { href: "/admin/policies", title: "House rules" };
@@ -1497,6 +1539,7 @@ const ALL: SettingDef[] = [
   ...MESSAGES,
   ...OTHER,
   ...VIP_CONFIG,
+  ...APPROVALS,
   ...POLICIES.map((p) => ({ ...p, page: POLICY_PAGE.href, pageTitle: POLICY_PAGE.title })),
 ];
 

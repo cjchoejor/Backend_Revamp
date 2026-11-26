@@ -3147,14 +3147,31 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 /* Leaving early and a room added, at Stay (2026-11-26). Rooms picked as buttons with a tick; the
    figures in a table and one line under it; a room due to leave today amber, its Release green. */
 .ds .leaving { display: flex; flex-direction: column; gap: var(--s3); }
-.ds .leaving-rooms { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
-.ds .leaving-room { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 6px 12px; border: 1px solid var(--line-2); border-radius: var(--r-control); background: var(--surface); color: var(--ink); font: inherit; font-weight: 500; cursor: pointer; text-align: left; }
-.ds .leaving-room:hover:not(:disabled) { background: var(--surface-2); border-color: var(--ink-3); }
-.ds .leaving-room.on { border: 2px solid var(--accent); background: var(--accent-soft); padding: 5px 11px; }
-.ds .leaving-room:disabled { opacity: .55; cursor: not-allowed; border-style: dashed; }
-.ds .leaving-room .sm { color: var(--ink-2); font-weight: 400; }
-.ds .lr-tick { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 1.5px solid var(--line-2); border-radius: 3px; font-size: 12px; font-weight: 800; color: #fff; flex-shrink: 0; }
-.ds .leaving-room.on .lr-tick { background: var(--accent); border-color: var(--accent); }
+/* The booking's rooms as a table to tick (2026-11-26, operator: "display it in a tabular format, showing
+   booked dates"): every row the same at rest, a ticked row the accent's tint with a 3px edge — one look,
+   whichever row, whatever was clicked. */
+.ds .leaving-pick, .ds .ar-table { margin: var(--s2) 0 0; }
+.ds .leaving-pick tbody tr, .ds .ar-table tbody tr { cursor: pointer; }
+.ds .leaving-pick tbody tr:hover td, .ds .ar-table tbody tr:hover td { background: var(--row-hover, var(--surface-2)); }
+.ds .leaving-pick tbody tr.on td, .ds .ar-table tbody tr.on td { background: var(--accent-soft); }
+.ds .leaving-pick tbody tr.on td:first-child, .ds .ar-table tbody tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ds .leaving-pick tbody tr.shut, .ds .ar-table tbody tr.shut { cursor: default; color: var(--ink-3); }
+.ds .leaving-pick tbody tr.shut:hover td, .ds .ar-table tbody tr.shut:hover td { background: transparent; }
+.ds .lp-tick { width: 34px; text-align: center; }
+.ds .lp-tick input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.ds .lp-tick input:disabled { cursor: not-allowed; }
+.ds .leaving-pick .num, .ds .ar-table .num { text-align: right; }
+.ds .ar-wrap { overflow-x: auto; max-height: 440px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-control); }
+.ds .ar-table { margin: 0; }
+.ds .ar-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.ds .ar-night { white-space: nowrap; text-align: center; }
+.ds .ar-cell { text-align: center; font-size: 12.5px; white-space: nowrap; }
+.ds .ar-cell.free { color: var(--success); font-weight: 600; }
+.ds .ar-cell.dirty { color: var(--warning-ink, var(--warning)); font-weight: 600; }
+.ds .ar-cell.taken { color: var(--danger); }
+.ds .ar-cell.out { color: var(--ink-3); }
+.ds .fom-wait.fw-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ds .fom-wait-acts { display: inline-flex; gap: var(--s2); margin-left: auto; flex-wrap: wrap; }
 .ds .leaving-fig { min-height: 38px; display: flex; align-items: center; font-size: var(--t-base); }
 .ds .leaving-table { margin-top: 0; }
 .ds .leaving-table .num { text-align: right; }

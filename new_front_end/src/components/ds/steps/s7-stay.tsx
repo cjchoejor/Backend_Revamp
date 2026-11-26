@@ -22,7 +22,7 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import { roomsInUseFor } from "@/lib/desk/party-rooms";
 import { EarlyDepartureFacts } from "@/components/desk/workspace/early-departure";
-import { AddRoom, LeavingEarly, RoomsLeavingCard } from "./s7-leaving";
+import { LeavingEarly, RoomsEditPane, RoomsLeavingCard } from "./s7-leaving";
 import { IdentityProofBlock } from "@/components/desk/workspace/identity-proof";
 import { SplitSettlementBlock } from "@/components/desk/workspace/split-settlement";
 import { InterimPaymentBlock } from "@/components/desk/workspace/stay-money";
@@ -86,9 +86,8 @@ export const S7_PANES: StepPane[] = [
   { key: "interim", label: "A mid-stay payment", cards: [] },
   { key: "extend", label: "Extending the stay", cards: [] },
   { key: "early", label: "Leaving early", cards: [] },
-  // Some rooms leave while the rest stay, and a room added (2026-11-26) — under Change booking.
-  { key: "remove", label: "Removing a room", cards: [] },
-  { key: "add-room", label: "Adding a room", cards: [] },
+  // A room added on the check-in day, or one booked by mistake removed (2026-11-26) — two sub-tabs.
+  { key: "rooms-edit", label: "Adding or removing a room", cards: [] },
 ];
 
 export function S7Stay({
@@ -262,20 +261,15 @@ export function S7Stay({
         </div>
       </div>
 
-      <div className="pane" hidden={at("remove")}>
-        <LeavingEarly
+      <div className="pane" hidden={at("rooms-edit")}>
+        <RoomsEditPane
           entry={entry}
-          startWith="ROOMS"
           goToStep={goToStep}
           onNightAudit={() => {
             stepPane.close();
             setPopup("nights");
           }}
         />
-      </div>
-
-      <div className="pane" hidden={at("add-room")}>
-        <AddRoom entry={entry} />
       </div>
 
       {past ? null : <StayActs entry={entry} inHouse={inHouse} onOpen={go} onPopup={setPopup} />}
@@ -438,23 +432,16 @@ function StayActs({
       reason: inHouse ? undefined : notNow,
     },
     {
-      key: "add-room",
-      label: "Add a room",
-      note: "Another room from tonight to the check-out — a stay of its own on this enquiry, billed with the trip.",
-      onSelect: inHouse && gm ? () => onOpen("add-room") : undefined,
-      reason: !inHouse ? notNow : gm ? undefined : "The GM's or an admin's",
-    },
-    {
-      key: "remove",
-      label: "Remove a room",
-      note: "A room leaves with its guests, today or on a later day; the rest of the booking stays. The hotel's early-departure fee applies.",
-      onSelect: inHouse && severalRooms ? () => onOpen("remove") : undefined,
-      reason: !inHouse ? notNow : severalRooms ? undefined : "One room in use — that is the whole booking leaving early",
+      key: "rooms-edit",
+      label: "Add or remove a room",
+      note: "Add a room on the check-in day, for the whole stay, with its new guests — or take off a room the hotel booked by mistake, with no fee. Who may is set in the admin console; anyone else asks them.",
+      onSelect: inHouse ? () => onOpen("rooms-edit") : undefined,
+      reason: inHouse ? undefined : notNow,
     },
     {
       key: "early",
       label: "Leaving early",
-      note: "The whole booking, or some rooms, today or on a later day before the check-out. The nights not slept are not charged; the hotel's early-departure fee applies. The GM records it.",
+      note: "The guest leaves before the check-out — the whole booking or some rooms, today or on a later day. The nights not slept are not charged; the hotel's early-departure fee applies.",
       onSelect: inHouse ? () => onOpen("early") : undefined,
       reason: inHouse ? undefined : notNow,
       danger: true,

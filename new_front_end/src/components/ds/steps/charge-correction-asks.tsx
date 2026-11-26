@@ -12,6 +12,7 @@
  * reads). The card reads the asks again every 8 s while one waits. Every figure is the server's.
  */
 import { useEffect, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -67,7 +68,7 @@ export function ChargeCorrectionAsks({
   mode?: "band" | "step";
 }) {
   const { session } = useSession();
-  const fom = atLeast(session?.actorLevel, "L2");
+  const fom = useMayApprove("CHARGE_CORRECTION", atLeast(session?.actorLevel, "L2")).may;
   const qc = useQueryClient();
   const refresh = useRefreshEntry(entry.id);
   const q = useChargeCorrections(entry);

@@ -131,7 +131,16 @@ export function BookingBox({
     ? "Tick the nights to move, or a room's number for all its nights"
     : !moves
       ? "Choose a new first night, or another room"
-      : null;
+      : (() => {
+          const seen = new Map<string, string>();
+          for (const t of tickedRooms) {
+            const to = toOf(t.roomId);
+            if (to === t.roomId) continue;
+            if (seen.has(to)) return `Rooms ${seen.get(to)} and ${t.roomNumber} cannot both go to Room ${no(to)} — pick another room for one`;
+            seen.set(to, t.roomNumber);
+          }
+          return null;
+        })();
   // A room's ticked nights may have gaps (2026-10-22, operator: "305 on the 25th and the 27th"):
   // each run moves by the same days, and each run that lands apart is a stay of its own.
   const markWhy = !tickedRooms.length ? "Tick something to mark" : null;
@@ -331,12 +340,16 @@ export function BookingBox({
                     <select className="input" value={toOf(t.roomId)} onChange={(e) => setTargets((m) => ({ ...m, [t.roomId]: e.target.value }))}>
                       {otherRooms.map((g) => (
                         <optgroup key={g.name} label={g.name}>
-                          {g.ids.map((id) => (
-                            <option key={id} value={id}>
-                              {no(id)}
-                              {id === t.roomId ? " · stays in this room" : ""}
-                            </option>
-                          ))}
+                          {g.ids.map((id) => {
+                            // A room another ticked room already goes to is not offered twice (2026-11-26).
+                            const goesHere = id !== t.roomId ? tickedRooms.find((o) => o.roomId !== t.roomId && toOf(o.roomId) === id && toOf(o.roomId) !== o.roomId) : undefined;
+                            return (
+                              <option key={id} value={id} disabled={!!goesHere}>
+                                {no(id)}
+                                {id === t.roomId ? " · stays in this room" : goesHere ? ` · Room ${goesHere.roomNumber} goes here` : ""}
+                              </option>
+                            );
+                          })}
                         </optgroup>
                       ))}
                     </select>

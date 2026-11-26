@@ -5,6 +5,7 @@
  */
 import type { Session } from "@/types/session";
 import { apiRequest } from "./client";
+import type { RoomCompositionInput } from "./quotations";
 
 export type LeavingRoom = {
   assignmentId: string;
@@ -71,7 +72,7 @@ export type LeavingOutcome =
 export function recordLeaving(
   session: Session,
   entryId: string,
-  body: { departureDate?: string; roomIds?: string[]; billing?: "TOGETHER" | "OWN"; reason: string; waiveFee?: boolean; waiveReason?: string },
+  body: { departureDate?: string; roomIds?: string[]; billing?: "TOGETHER" | "OWN"; reason: string; waiveFee?: boolean; waiveReason?: string; kind?: "LEAVING" | "REMOVED" },
 ) {
   return apiRequest<LeavingOutcome>(`/api/entries/${entryId}/early-departure`, { session, method: "POST", body });
 }
@@ -90,6 +91,8 @@ export type RoomDepartureRow = {
   waiveReason: string | null;
   feeLineId: string | null;
   billing: "TOGETHER" | "OWN";
+  /** LEAVING — the guest's choice, the fee applies; REMOVED — the hotel's mistake, no fee. */
+  kind: "LEAVING" | "REMOVED";
   state: "SCHEDULED" | "LEFT";
   dueToday: boolean;
   leftAt: string | null;
@@ -109,54 +112,112 @@ export function releaseRoomDeparture(session: Session, entryId: string, recordId
   });
 }
 
-export type AddRoomPreview = {
-  startDate: string;
-  endDate: string | null;
-  nights: number;
-  requiredLevel: "L3";
-  refusal: string | null;
-  serviceChargeRate?: number | null;
-  gstRate?: number | null;
-  rooms: Array<{ roomId: string; roomNumber: string; roomTypeId: string | null; roomTypeName: string | null; bedType: string | null; needsCleaning: boolean }>;
-  types: Array<{
-    roomTypeId: string;
-    name: string;
-    freeCount: number;
-    maxCapacity: number | null;
-    roomRate: number | null;
-    packageName: string | null;
-    extraBedRate: number | null;
-    breakfastRate: number | null;
-    lunchRate: number | null;
-    dinnerRate: number | null;
-    cpRate: number | null;
-    mapLunchRate: number | null;
-    mapDinnerRate: number | null;
-    apRate: number | null;
-  }>;
+/* ---------------------------------------------------------------- removing a room booked by mistake */
+
+export type RoomRemovalAsk = {
+  id: string;
+  roomIds: string[];
+  roomNumbers: string[];
+  departureDate: string;
+  reason: string;
+  status: "REQUESTED" | "APPROVED" | "REJECTED" | "WITHDRAWN";
+  requestedBy: string;
+  requestedByName?: string | null;
+  requestedAt: string;
+  decidedBy: string | null;
+  decidedByName?: string | null;
+  decidedLevel: string | null;
+  decidedAt: string | null;
+  decisionNote: string | null;
+  recordIds: string[];
 };
 
-export function previewAddRoom(session: Session, entryId: string, body: { startDate?: string }) {
-  return apiRequest<AddRoomPreview>(`/api/entries/${entryId}/add-room/preview`, { session, method: "POST", body });
+export function getRoomRemovals(session: Session, entryId: string) {
+  return apiRequest<{ items: RoomRemovalAsk[]; waiting: RoomRemovalAsk | null; mayDecide: boolean; approvers: string }>(`/api/entries/${entryId}/room-removals`, { session });
+}
+export function askToRemoveRoom(session: Session, entryId: string, body: { roomIds: string[]; departureDate?: string; reason: string }) {
+  return apiRequest<{ request: RoomRemovalAsk; approvers: string }>(`/api/entries/${entryId}/room-removals`, { session, method: "POST", body });
+}
+export function decideRoomRemoval(session: Session, entryId: string, requestId: string, body: { decision: "APPROVE" | "REJECT"; note?: string | null }) {
+  return apiRequest<{ decision: "APPROVE" | "REJECT"; removal: { records: Array<{ roomNumber: string }> } | null }>(`/api/entries/${entryId}/room-removals/${requestId}/decide`, {
+    session,
+    method: "POST",
+    body,
+  });
+}
+export function withdrawRoomRemoval(session: Session, entryId: string, requestId: string) {
+  return apiRequest<{ withdrawn: boolean }>(`/api/entries/${entryId}/room-removals/${requestId}/withdraw`, { session, method: "POST", body: {} });
 }
 
-export type AddRoomOutcome = {
-  newEntryId: string;
-  roomNumber: string;
-  checkInDate: string;
-  checkOutDate: string;
-  reachedStage: string;
-  roomHandedOut: boolean;
-  blocked: { atStep: string; message: string } | null;
-  notes: string[];
-  quotationId: string | null;
-  quotationTotal: number | null;
+/* ---------------------------------------------------------------- rooms added on the check-in day */
+
+export type AddRoomHolder = {
+  entryId: string;
+  bookingRef: string | null;
+  guestName: string | null;
+  partyName: string | null;
+  stage: string;
+  status: string;
+  checkIn: string | null;
+  checkOut: string | null;
+  nightsInRoom: string[];
+  swappable: boolean;
+  why: string | null;
+  rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
 };
 
-export function addRoom(
+export type AddRoomRow = {
+  roomId: string;
+  roomNumber: string;
+  roomTypeId: string;
+  roomTypeName: string | null;
+  bedType: string | null;
+  maxCapacity: number | null;
+  maxExtraBeds: number | null;
+  availability: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
+  perNight: Array<{ date: string; status: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE"; guest: string | null; bookingRef: string | null }>;
+  selectable: boolean;
+  why: string | null;
+  needsCleaning: boolean;
+  holders: AddRoomHolder[];
+  roomRate: number | null;
+};
+
+export type AddRoomPreview = {
+  checkIn: string | null;
+  checkOut: string | null;
+  nights: string[];
+  refusal: string | null;
+  approvers: { may: boolean; words: string };
+  party: { adults: number; childAges: number[] };
+  rooms: AddRoomRow[];
+  serviceChargeRate: number | null;
+  gstRate: number | null;
+};
+
+export function previewAddRoom(session: Session, entryId: string) {
+  return apiRequest<AddRoomPreview>(`/api/entries/${entryId}/add-room/preview`, { session, method: "POST", body: {} });
+}
+
+export type AddRoomsOutcome = {
+  roomNumbers: string[];
+  party: { adultCount: number; childCount: number; childAges: number[]; guestCount: number };
+  outcome: {
+    quotationId: string | null;
+    pricing: { priorTotal: number | null; newTotal: number | null; delta: number | null; currency: string | null };
+    walk: { returnedToOrigin: boolean; reachedStage: string; blocked: { atStep: string; code: string | null; message: string } | null };
+    heldDocuments: Array<{ id: string; kind: string; documentId: string }>;
+  };
+};
+
+export function addRooms(
   session: Session,
   entryId: string,
-  body: { roomId: string; startDate?: string; adults: number; childAges: number[]; mealPlan: "EP" | "CP" | "MAPL" | "MAPD" | "AP"; reason: string },
+  body: { roomIds: string[]; adults: number; childAges: number[]; roomCompositions: RoomCompositionInput[]; reason?: string | null },
 ) {
-  return apiRequest<AddRoomOutcome>(`/api/entries/${entryId}/add-room`, { session, method: "POST", body });
+  return apiRequest<AddRoomsOutcome>(`/api/entries/${entryId}/add-room`, { session, method: "POST", body });
+}
+
+export function discardPendingGuests(session: Session, entryId: string, subjectKeys: string[]) {
+  return apiRequest<{ discarded: number }>(`/api/entries/${entryId}/add-room/discard-guests`, { session, method: "POST", body: { subjectKeys } });
 }

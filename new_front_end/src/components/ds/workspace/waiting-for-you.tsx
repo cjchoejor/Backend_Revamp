@@ -15,6 +15,9 @@
  */
 import { Button } from "@/design-system";
 import { useSession } from "@/hooks/use-session";
+import { useApprovals } from "@/hooks/use-approvals";
+import type { ApprovalAct } from "@/lib/api/approvals";
+import { RoomRemovalAsks } from "../steps/s7-leaving";
 import type { DeskListRow } from "@/lib/api/desk";
 import { fmtDateTime, money } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
@@ -22,7 +25,7 @@ import { atLeast } from "../steps/kit";
 import { ChargeCorrectionAsks, useChargeCorrections } from "../steps/charge-correction-asks";
 
 type Go = { step: number; card: string };
-type Ask = { key: string; title: string; detail: string | null; at: string; go: Go };
+type Ask = { key: string; title: string; detail: string | null; at: string; go: Go; act: ApprovalAct };
 
 function asksOf(row: DeskListRow | null, entry: EntryDetail): Ask[] {
   if (!row) return [];
@@ -35,6 +38,7 @@ function asksOf(row: DeskListRow | null, entry: EntryDetail): Ask[] {
       detail: `${money(o.amountOwed)} owed · “${o.guestWords}”`,
       at: o.requestedAt,
       go: { step: 8, card: "settle" },
+      act: "LEAVE_OWING",
     });
   }
   for (const d of row.checkInPaymentDeferrals ?? []) {
@@ -45,6 +49,7 @@ function asksOf(row: DeskListRow | null, entry: EntryDetail): Ask[] {
       detail: `${money(d.stillToPay)} still to pay`,
       at: d.requestedAt,
       go: { step: stepNow === 5 ? 5 : 6, card: "advance" },
+      act: "CHECKIN_PAY_LATER",
     });
   }
   for (const a of row.negotiationAmendmentRequests ?? []) {
@@ -54,6 +59,7 @@ function asksOf(row: DeskListRow | null, entry: EntryDetail): Ask[] {
       detail: a.summary,
       at: a.requestedAt,
       go: { step: 2, card: "table" },
+      act: "NEGOTIATION_CHANGE",
     });
   }
   return out;
@@ -73,10 +79,14 @@ export function WaitingForYourAnswer({
 }) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
-  const corrections = useChargeCorrections(entry).data?.open ?? [];
-  if (!fom || entry.status !== "ACTIVE") return null;
-  const asks = asksOf(row, entry);
-  const count = asks.length + corrections.length;
+  // Each ask is answered by whoever the admin console lets (2026-11-26); the rule as built while it is read.
+  const approvals = useApprovals().data?.acts ?? null;
+  const may = (act: ApprovalAct) => (approvals ? approvals[act].may : fom);
+  const corrections = (useChargeCorrections(entry).data?.open ?? []).filter(() => may("CHARGE_CORRECTION"));
+  if (entry.status !== "ACTIVE") return null;
+  const asks = asksOf(row, entry).filter((a) => may(a.act));
+  const removals = entry.currentStage === "S7" && may("ROOM_REMOVE") ? (row?.roomRemovalRequests ?? []) : [];
+  const count = asks.length + corrections.length + removals.length;
   if (!count) return null;
   return (
     <section className="fom-wait" role="region" aria-label="Waiting for your answer" data-fom-wait={count}>
@@ -87,6 +97,7 @@ export function WaitingForYourAnswer({
         Waiting for your answer{count > 1 ? <span className="fom-wait-n">{count}</span> : null}
       </h3>
       {corrections.length ? <ChargeCorrectionAsks entry={entry} tz={tz} live mode="band" /> : null}
+      {removals.length ? <RoomRemovalAsks entry={entry} /> : null}
       {asks.map((a) => (
         <div key={a.key} className="fom-wait-row">
           <span className="fom-wait-text">

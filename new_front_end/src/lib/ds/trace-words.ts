@@ -218,6 +218,13 @@ const WORDS: Record<string, string> = {
   "ENTRY.ROOMS_LEAVING_EARLY": "Rooms leaving early recorded",
   "ROOM.RELEASED_MID_STAY": "A room left — the rest of the booking stays",
   "ENTRY.ROOM_ADDED": "A room added as a stay of its own",
+  "ENTRY.ROOMS_ADDED": "Rooms added to the booking, with their guests",
+  "ENTRY.ROOMS_REMOVED": "A room booked by mistake came off the stay",
+  "ROOM_REMOVAL.REQUESTED": "Asked to remove a room booked by mistake",
+  "ROOM_REMOVAL.APPROVED": "Removing the room was approved",
+  "ROOM_REMOVAL.REJECTED": "Removing the room was turned down",
+  "ROOM_REMOVAL.WITHDRAWN": "The ask to remove a room was taken back",
+  "NOTIFICATION.ROOM_REMOVAL_REQUESTED": "Those who approve were told the desk asks to remove a room",
   "ENTRY.CREATED_AS_ADDED_ROOM": "Made for a room added to another stay",
   "FOLIO.SEAL_STAMP_CLEARED": "The bill read as sealed by mistake — put back",
   "CHARGE_CORRECTION.REQUESTED": "Asked the FOM to correct a charge",
@@ -282,7 +289,7 @@ export function traceWords(ev: TraceEvent): string {
 }
 
 type RoomChangedPayload = {
-  kind?: "ROOM" | "SETUP" | "EXTENSION" | "DATES" | "SPLIT";
+  kind?: "ROOM" | "SETUP" | "EXTENSION" | "DATES" | "SPLIT" | "ADD";
   /** Rooms split off to their own booking (2026-10-14). */
   split?: { roomNumbers?: string[] | null; toLabel?: string | null } | null;
   /** A date move (2026-10-13): the stay before and after, the rooms that changed row, the price choice per room. */
@@ -316,6 +323,10 @@ function roomChangeWords(p: RoomChangedPayload): string {
   const from = p.fromRoom?.roomNumber ?? null;
   const tos = (p.toRooms ?? []).map((r) => r.roomNumber).filter((n): n is string => !!n);
   if (p.kind === "EXTENSION") return "Stay extended";
+  if (p.kind === "ADD") {
+    const nos = (p as { added?: { roomNumbers?: string[] } | null }).added?.roomNumbers ?? [];
+    return nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(" + ")} added to the booking` : "Rooms added to the booking";
+  }
   if (p.kind === "SPLIT") {
     const nos = p.split?.roomNumbers ?? [];
     return nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(" + ")} split off to ${nos.length > 1 ? "their" : "its"} own booking` : "Rooms split off to their own booking";

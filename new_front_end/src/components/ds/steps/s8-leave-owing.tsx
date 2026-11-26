@@ -13,6 +13,7 @@
  * Every figure is the server's (`GET /api/entries/:id/leave-owing`). Nothing is worked out here.
  */
 import { useEffect, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -135,6 +136,8 @@ export function LeaveOwingStatus({
   onDecided: () => void;
 }) {
   const { session } = useSession();
+  // Who decides is the admin console's (2026-11-26); the caller's rule stands while it is read.
+  fom = useMayApprove("LEAVE_OWING", fom).may;
   const qc = useQueryClient();
   const [approveOpen, setApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);

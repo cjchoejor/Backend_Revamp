@@ -94,6 +94,8 @@ export type DeskListRow = {
   negotiationAmendmentRequests?: Array<{ id: string; summary: string | null; requestedAt: string }>;
   /** Waiting for the FOM (2026-11-26): the desk asks to correct a charge on a settled bill. */
   chargeCorrectionRequests?: Array<{ id: string; reason: string; requestedAt: string }>;
+  /** Waiting for the FOM (2026-11-26): the desk asks to remove a room booked by mistake. */
+  roomRemovalRequests?: Array<{ id: string; roomNumbers: string[]; reason: string; requestedAt: string }>;
   timers: Array<{ timerCode: string; timerType: string; firesAt: string }>;
   custodianName: string | null;
   parkReason: string | null;

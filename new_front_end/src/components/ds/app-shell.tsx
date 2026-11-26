@@ -9,6 +9,7 @@
  * only. Panels hang from the control that opened them and close on an outside click, Escape, or
  * the control again.
  */
+import { useMayApproveAnything } from "@/hooks/use-approvals";
 import { useRefunds } from "@/hooks/use-refunds";
 import { useUnseenReplies } from "@/hooks/use-conversation";
 import { RefundCoin } from "@/components/ds/refund-bits";
@@ -107,6 +108,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const lateRooms = (housekeeping.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN" && r.toClean?.overdue);
   // Money to give back, for the FOM, GM and admin (2026-11-05): a row of its own, with the money sign.
   const fom = !!session && session.actorLevel !== "L1";
+  // Who answers the desk's asks is the admin console's (2026-11-26) — the quick check and the loud rows follow it.
+  const mayDecide = useMayApproveAnything(fom);
   const refundsQ = useRefunds("waiting");
   const refundsWaiting = refundsQ.data?.items ?? [];
   // A guest's reply by email nobody has read yet (2026-11-12): a row each, opening the booking's Emails.
@@ -119,7 +122,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const waitingQ = useQuery({
     queryKey: ["waiting-for-fom"],
     queryFn: () => getWaitingForFom(session!),
-    enabled: !!session && fom,
+    enabled: !!session && mayDecide,
     staleTime: 0,
     refetchInterval: 8_000,
     refetchIntervalInBackground: true,
@@ -174,7 +177,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       // A block whose time ended goes to the FOM and GM, first on their list (2026-11-05).
       .filter((i) => fom || !i.critical)
       // Then what waits for the FOM's answer (2026-11-26), on the FOM's and GM's bell.
-      .sort((a, b) => Number(!!b.critical) - Number(!!a.critical) || (fom ? Number(!!b.fomDecides) - Number(!!a.fomDecides) : 0));
+      .sort((a, b) => Number(!!b.critical) - Number(!!a.critical) || (mayDecide ? Number(!!b.fomDecides) - Number(!!a.fomDecides) : 0));
     // clock.now moves every 15 s; the list only needs to follow it loosely
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bookings.data, hotelDay?.today, fom, Math.floor(clock.now / 60_000)]);
@@ -186,7 +189,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const bellItems = useMemo(
     () => [
       // Loud: what waits for the FOM's answer, and what is critical — on the FOM's and GM's bell.
-      ...urgent.map((i) => ({ key: `a:${i.key}`, text: i.need, who: i.name, href: `/bookings/${i.entryId}`, loud: fom && (!!i.fomDecides || !!i.critical) })),
+      ...urgent.map((i) => ({ key: `a:${i.key}`, text: i.need, who: i.name, href: `/bookings/${i.entryId}`, loud: (mayDecide && !!i.fomDecides) || (fom && !!i.critical) })),
       ...(lateRooms.length
         ? [{ key: "rooms-late", text: `${lateRooms.length === 1 ? `Room ${lateRooms[0].roomNumber}` : `${lateRooms.length} rooms`} past the clean-by time`, who: "Housekeeping", href: "/housekeeping" }]
         : []),

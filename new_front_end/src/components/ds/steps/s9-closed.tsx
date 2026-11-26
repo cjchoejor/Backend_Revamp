@@ -16,6 +16,7 @@
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
@@ -689,6 +690,7 @@ function AfterStayHandoff({ entry, tz }: { entry: EntryDetail; live: boolean; tz
 function LateChargePane({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
+  const corr = useMayApprove("CHARGE_CORRECTION", fom);
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -729,13 +731,13 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
             </Button>
             {/* The FOM's; the front desk asks the FOM, who answers from the bell (2026-11-26). */}
             <Button kind="secondary" state={whyNotCorrect ? "inert" : "default"} reason={whyNotCorrect ?? undefined} onClick={() => setCorrecting(true)}>
-              {fom ? "Correct a charge" : "Ask the FOM to correct a charge"}
+              {corr.may ? "Correct a charge" : "Ask the FOM to correct a charge"}
             </Button>
           </div>
         </Live>
       </StepCard>
       {why ? null : <LateCharge entry={entry} open={posting} onClose={() => setPosting(false)} />}
-      {whyNotCorrect ? null : <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} ask={!fom} />}
+      {whyNotCorrect ? null : <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} ask={!corr.may} />}
     </>
   );
 }

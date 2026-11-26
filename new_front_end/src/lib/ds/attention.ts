@@ -140,6 +140,10 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
     for (const a of r.negotiationAmendmentRequests ?? []) {
       if (step === 2) push(r, { need: "A change waits for the FOM's approval", band: "overdue", work: "holds", fomDecides: true, since: new Date(a.requestedAt).getTime() });
     }
+    for (const x of r.roomRemovalRequests ?? []) {
+      const rooms = x.roomNumbers.length === 1 ? `Room ${x.roomNumbers[0]}` : `Rooms ${x.roomNumbers.join(", ")}`;
+      if (step === 7) push(r, { need: `Asks to remove ${rooms} · booked by mistake`, band: "overdue", work: "departures", fomDecides: true, since: new Date(x.requestedAt).getTime() });
+    }
 
     // An arrival date that has passed before check-in
     if (ci && ci < hotelToday && step >= 3 && step <= 6) {

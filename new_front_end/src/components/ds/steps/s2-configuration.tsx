@@ -28,6 +28,7 @@
 import { AddReturnStay } from "@/components/ds/workspace/return-stay";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -616,7 +617,8 @@ export function useChangeConfiguration({
    * afterwards. The backend decides for real; this only names what the press will do.
    */
   const liveQuote = (entry.quotations ?? []).some((q) => q.state === "SENT" || q.state === "ACCEPTED");
-  const needsApproval = !inPlace && liveQuote && !atLeast(session?.actorLevel, "L2");
+  const changeRule = useMayApprove("NEGOTIATION_CHANGE", atLeast(session?.actorLevel, "L2"));
+  const needsApproval = !inPlace && liveQuote && !changeRule.may;
   const pending = save.isPending || change.isPending;
 
   const nothingMoved = !partyMoved && !roomsMoved && !datesMoved && !bedsMoved;
@@ -1036,7 +1038,7 @@ export function WaitingConfigurationChange({ entry }: { entry: EntryDetail }) {
   const refresh = useRefreshEntry(entry.id);
   const [note, setNote] = useState("");
   const [rejecting, setRejecting] = useState(false);
-  const elevated = atLeast(session?.actorLevel, "L2");
+  const elevated = useMayApprove("NEGOTIATION_CHANGE", atLeast(session?.actorLevel, "L2")).may;
 
   const requests = entry.negotiationAmendmentRequests ?? [];
   const waiting = requests.find((r) => r.state === "REQUESTED") ?? null;

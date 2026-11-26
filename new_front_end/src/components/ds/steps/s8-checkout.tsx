@@ -16,6 +16,7 @@
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon, Refusal } from "@/design-system";
@@ -627,6 +628,8 @@ function FolioTableCard({
 }) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
+  // Correcting a settled bill: whoever the admin console lets (2026-11-26).
+  const corr = useMayApprove("CHARGE_CORRECTION", fom);
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -656,7 +659,7 @@ function FolioTableCard({
               Post a charge
             </Button>
             {correctable ? (
-              fom ? (
+              corr.may ? (
                 <Button className="go" onClick={() => setOpen("correct")}>
                   Correct a charge
                 </Button>
@@ -683,7 +686,7 @@ function FolioTableCard({
             </Button>
           </div>
           <PostChargeDialog entry={entry} open={open === "post"} onClose={() => setOpen(null)} target={target} setTarget={setTarget} />
-          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} ask={correctable && !fom} />
+          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} ask={correctable && !corr.may} />
           <CreditNoteDialog entry={entry} open={open === "credit"} onClose={() => setOpen(null)} />
         </Live>
       ) : null}

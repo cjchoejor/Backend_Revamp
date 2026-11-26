@@ -23,7 +23,8 @@ import { listRooms } from "@/lib/api/rooms";
 import { seatPartyByComposition } from "@/lib/desk/party-rooms";
 import { fmtDmy } from "@/lib/ds/format";
 import { IdPhotoViewerHost } from "@/components/desk/workspace/id-photo-viewer";
-import { partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
+import { IdentityProofBlock, partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
+import { SubTabs, Tool } from "../steps/kit";
 import type { EntryDetail } from "@/types/api";
 import { Button } from "@/design-system";
 import { SwapGuestsDialog, type SwapCandidate } from "./guests-swap";
@@ -45,7 +46,39 @@ export function useGuestsRecorded(entry: EntryDetail | null, on: boolean) {
   return c ? { filled: c.filledSlots, total: c.totalSlots, done: c.satisfied } : null;
 }
 
+/**
+ * Two sub-tabs (2026-11-26, operator: "a subtab like info which shows the records of guest documents and
+ * then edit where they can upload or change the info … use the same system to detect the info"):
+ * Info — what is recorded, as before; Edit — the guest table itself, with its photo, phone code and the
+ * reading of the ID, open from Arrival to the end of the stay (it is read-only once sealed).
+ */
 export function GuestsView({ entry }: { entry: EntryDetail }) {
+  const editable = entry.status === "ACTIVE" && ["S5", "S6", "S7", "S8"].includes(entry.currentStage);
+  return (
+    <SubTabs
+      label="The guests"
+      param="gsub"
+      tabs={[
+        { key: "info", label: "Info", content: <GuestsInfo entry={entry} /> },
+        editable
+          ? {
+              key: "edit",
+              label: "Edit",
+              content: (
+                <div className="guests-edit">
+                  <Tool inert={false}>
+                    <IdentityProofBlock entry={entry} title="The guests' details and ID" />
+                  </Tool>
+                </div>
+              ),
+            }
+          : null,
+      ]}
+    />
+  );
+}
+
+function GuestsInfo({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const list = useQuery({
     queryKey: ["identity-proofs", entry.id],
