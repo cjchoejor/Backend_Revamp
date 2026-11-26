@@ -322,6 +322,26 @@ export const listEntriesQuerySchema = z.object({
 export type ListEntriesQueryDto = z.infer<typeof listEntriesQuerySchema>;
 
 /** The rest of the bill at check-in (2026-10-29): the desk asks the FOM to let the guest pay later. */
+/** A charge on a settled bill the desk asks the FOM to correct (2026-11-26). */
+export const chargeCorrectionAskRequestSchema = z.object({
+  originalLineId: z.string().trim().min(1),
+  mode: z.enum(["ADJUST", "SET_NET"]),
+  value: z.number().finite(),
+  reason: z.string().trim().min(1).max(500),
+});
+export const chargeCorrectionDecideRequestSchema = z.object({
+  decision: z.enum(["APPROVE", "REJECT"]),
+  note: z.string().trim().max(1000).optional().nullable(),
+});
+
+/** Leaving owing at Check-out (2026-11-26): the desk asks the FOM, the FOM decides. */
+export const leaveOwingAskRequestSchema = z.object({ guestWords: z.string().trim().min(1).max(1000) });
+export const leaveOwingDecideRequestSchema = z.object({
+  decision: z.enum(["APPROVE", "REJECT"]),
+  note: z.string().trim().max(1000).optional().nullable(),
+  payWithinDays: z.number().positive().max(365).optional().nullable(),
+});
+
 export const checkInPaymentDeferralRequestSchema = z.object({
   reason: z.string().trim().min(1).max(2000),
 });

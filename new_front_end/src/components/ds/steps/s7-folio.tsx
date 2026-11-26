@@ -11,14 +11,15 @@
  * and a credit note are the only other ways a line is added. Nothing here adds money up.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import { getFolioDocuments } from "@/lib/api/documents";
 import { getBillingSummary } from "@/lib/api/entries";
-import { correctFolioCharge, postCreditNote, postFolioCharge } from "@/lib/api/in-stay";
+import { correctFolioCharge, postCreditNote, postFolioCharge, type SettledCorrectionOutcome } from "@/lib/api/in-stay";
+import { askChargeCorrection } from "@/lib/api/charge-corrections";
 import { fmtDay, money, plural } from "@/lib/ds/format";
 import {
   FolioLinesTable,
@@ -53,6 +54,7 @@ import { DateInput, TimeInput, timeInWords } from "@/components/ds/date-input";
 import { getPayer } from "@/lib/api/payer";
 import { payerWord } from "./s7-desk";
 import { useBookedBy } from "./s8-parts";
+import { RefundDialog, type RefundTarget } from "./refund-card";
 
 /**
  * What the charge was, asked in the outlet's own words (2026-10-29, operator: "simply saying 'what' is
@@ -631,9 +633,34 @@ export function PostChargeDialog({
 const tabOf = (k: string): FolioTab =>
   k === "ALL" || k === "WHOLE" ? k : k.startsWith("space:") ? { spaceId: k.slice(6) } : { roomId: k.slice(5) };
 
-export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail; open: boolean; onClose: () => void }) {
+/** What followed a correction on a settled bill, said in toasts (2026-11-26). */
+export function toastSettledOutcome(o: SettledCorrectionOutcome) {
+  for (const v of o.voucherReduced) toast.success(`${o.payer.name}'s voucher now covers ${money(v.amount)} less — nothing is handed over`);
+  for (const r of o.invoicesReplaced) toast.success(`Tax invoice ${r.newId} replaces ${r.oldRef} — send it from the Tax invoice tab`);
+  // "Again" only when the bill had been settled — a share still owing was never paid (2026-11-26).
+  if (o.owedNow > 0) toast.warning(o.stateBefore === "SETTLED" ? `${money(o.owedNow)} is owed again on the bill — take the payment` : `${money(o.owedNow)} is now owed on the bill`);
+}
+
+export function CorrectionDialog({
+  entry,
+  open,
+  onClose,
+  ask = false,
+}: {
+  entry: EntryDetail;
+  open: boolean;
+  onClose: () => void;
+  /** The front desk on a settled bill (2026-11-26): the same form asks the FOM instead of posting. */
+  ask?: boolean;
+}) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
+  const qc = useQueryClient();
+  // A settled bill is corrected too (2026-11-26): the FOM's, and what follows is the server's — the
+  // agency's voucher covering less, the refund to record straight away, a tax invoice replaced.
+  const settled = !!entry.folio && entry.folio.state !== "LIVE";
+  const [refundFor, setRefundFor] = useState<RefundTarget | null>(null);
+  const [refundLead, setRefundLead] = useState<string | null>(null);
   const targets = useChargeTargets(entry);
   const billing = useBillingSummary(entry);
   const lines = entry.folio?.lines ?? [];
@@ -692,6 +719,16 @@ export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail;
         ? "the reason"
         : null;
 
+  const askFom = useMutation({
+    mutationFn: () => askChargeCorrection(session!, entry.id, { originalLineId: lineId, mode: mode === "setNet" ? "SET_NET" : "ADJUST", value: num, reason: reason.trim() }),
+    onSuccess: (data) => {
+      qc.setQueryData(["charge-corrections", entry.id], data);
+      toast.success("The FOM has been asked — their answer shows on the bill");
+      refresh([["charge-corrections", entry.id]]);
+      onClose();
+    },
+    onError: (e) => toastRefusal(e, "Could not ask the FOM"),
+  });
   const save = useMutation({
     mutationFn: () => {
       if (!entry.folio?.id) throw new Error("There is no folio");
@@ -705,9 +742,24 @@ export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail;
       else body.correctionAmount = num;
       return correctFolioCharge(session!, entry.folio.id, body);
     },
-    onSuccess: () => {
+    onSuccess: (line) => {
       toast.success("Correction posted — its service charge and GST moved with it");
-      refresh();
+      const o = line.afterSettlement;
+      if (o) {
+        toastSettledOutcome(o);
+        if (o.refundDue) {
+          // Straight to the refund (2026-11-26, operator ruling).
+          setRefundLead(`The correction leaves ${o.refundDue.payerName} ${money(o.refundDue.amount)} paid above their share. Record the refund now.`);
+          setRefundFor({
+            billingModel: o.refundDue.billingModel,
+            amount: o.refundDue.amount,
+            payerName: o.refundDue.payerName,
+            wayItCame: o.refundDue.wayItCame,
+            why: reason.trim(),
+          });
+        }
+      }
+      refresh([["billing-summary"], ["folio-documents"], ["vouchers"]]);
       onClose();
     },
     onError: (e) => toastRefusal(e, "The correction could not be posted"),
@@ -715,11 +767,12 @@ export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail;
 
   const picked = correctable.find((l) => l.id === lineId) ?? null;
   return (
+    <>
     <WideDialog
       open={open}
       onClose={onClose}
       register="commit"
-      title="Correct a charge"
+      title={ask ? "Ask the FOM to correct a charge" : "Correct a charge"}
       caseLines={picked ? [`${picked.description} · ${money(picked.amount, picked.currency)}`] : undefined}
       help="A charge on the bill can't be edited or deleted. The correction adds a second line beside it, so the bill shows both the mistake and the fix; the charge's service charge and GST move with it, at the rates it was charged at." 
       width={780}
@@ -729,12 +782,39 @@ export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail;
           <Button kind="quiet" state={save.isPending ? "inert" : "default"} onClick={onClose}>
             Not now
           </Button>
-          <Button state={save.isPending ? "working" : missing ? "inert" : "default"} title={missing ?? undefined} workingLabel="Posting…" onClick={() => save.mutate()}>
-            Post the correction
-          </Button>
+          {ask ? (
+            <Button
+              className={missing ? undefined : "go"}
+              state={askFom.isPending ? "working" : missing ? "inert" : "default"}
+              reason={missing ? `first: ${missing}` : undefined}
+              workingLabel="Asking…"
+              onClick={() => askFom.mutate()}
+            >
+              Ask the FOM
+            </Button>
+          ) : (
+            <Button state={save.isPending ? "working" : missing ? "inert" : "default"} title={missing ?? undefined} workingLabel="Posting…" onClick={() => save.mutate()}>
+              Post the correction
+            </Button>
+          )}
         </>
       }
     >
+      {ask ? (
+        <div className="notice next" role="status" style={{ marginBottom: 10 }}>
+          <span>
+            <b>A share of the bill is settled, so the FOM corrects it.</b> Pick the charge, the right figure and why. The FOM, the GM or an admin sees it in their
+            bell and corrects it, or turns it down with words you read here.
+          </span>
+        </div>
+      ) : settled ? (
+        <div className="notice next" role="status" style={{ marginBottom: 10 }}>
+          <span>
+            <b>The bill is settled.</b> The correction goes on the share it belongs to. Money paid above that share is refunded next; an agency&rsquo;s voucher not paid
+            for yet covers less; a tax invoice that went out is replaced by a new one, the old one kept as it was.
+          </span>
+        </div>
+      ) : null}
       {tabs.length > 1 ? <Choice options={tabs} value={tab} onChange={pickTab} /> : null}
       <div style={{ maxHeight: 280, overflow: "auto", marginTop: 8 }}>
         <table className="table compact">
@@ -800,6 +880,14 @@ export function CorrectionDialog({ entry, open, onClose }: { entry: EntryDetail;
         </div>
       </div>
     </WideDialog>
+    <RefundDialog
+      entry={entry}
+      open={!!refundFor}
+      onClose={() => setRefundFor(null)}
+      target={refundFor}
+      lead={refundLead ? <div className="notice next" role="status"><span>{refundLead}</span></div> : undefined}
+    />
+    </>
   );
 }
 

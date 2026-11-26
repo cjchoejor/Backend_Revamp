@@ -33,6 +33,20 @@ export async function getEntryTrace(session: Session, entryId: string, limit = 1
 }
 
 /**
+ * The booking's record for History (2026-11-26): every act, each act's facts in plain lines
+ * (`facts`, by act id — what was asked, the rooms and meal plans a quotation priced, how money was
+ * paid), the acts that leave no record of their own (`extra`: a charge posted, who pays set), and
+ * the step an act recorded without one belongs to (`stages`). Written by the server from the
+ * records the acts point to (services/domain/history-facts-service.ts).
+ */
+export async function getEntryHistory(session: Session, entryId: string, limit = 300) {
+  return apiRequest<{ items: TraceEvent[]; count: number; facts: Record<string, string[]>; extra: TraceEvent[]; stages: Record<string, string> }>(
+    `/api/entries/${entryId}/trace?limit=${limit}&facts=1`,
+    { session },
+  );
+}
+
+/**
  * The four governed guest-facing communications and their acknowledgement state — quotation (S2),
  * proforma invoice (S3), confirmation voucher (S4), pre-arrival reminder (S5).
  *
@@ -318,7 +332,7 @@ export type BulkKeyIssueOutcome = {
   skipped: Array<{
     roomId: string;
     roomNumber: string;
-    reason: "ALREADY_OUT" | "PRIOR_ROOM_KEY_OUTSTANDING" | "NOT_YET_OCCUPIED";
+    reason: "ALREADY_OUT" | "PRIOR_ROOM_KEY_OUTSTANDING" | "NOT_YET_OCCUPIED" | "LEFT";
     blockedBy: Array<{ roomId: string; roomNumber: string }>;
     movesInOn: string | null;
   }>;
@@ -600,6 +614,16 @@ export type EntryBillingSummary = {
       feeAmount: number;
       feeWaived: boolean;
     } | null;
+    /** Rooms leaving early while the rest stay (2026-11-26): `amount` is already less their nights not slept. */
+    roomsLeaving?: Array<{
+      roomNumber: string;
+      departureDate: string;
+      unstayedNights: number;
+      forgoneTotal: number;
+      feeAmount: number;
+      feeWaived: boolean;
+      state: string;
+    }>;
   };
   /** Per-room price breakdown from the stored composition (null on flat-path quotes). */
   rooms: Array<{
@@ -636,6 +660,8 @@ export type EntryBillingSummary = {
     outstandingBalance: number | null;
     /** Money paid above the bill — the balance floors at zero, so only this shows it (2026-09-18). */
     overpaid?: number | null;
+    /** Each payer's money above their own share (2026-11-26), with how it came in. */
+    overpaidByPayer?: Array<{ billingModel: string; amount: number; wayItCame: string }>;
     /** Per-room charge subtotals (2026-08-14) — server-summed; null when no line carries a room.
      *  `base` / `serviceCharge` / `gst` (2026-08-21) split the bucket for the per-room tabs;
      *  base + serviceCharge + gst = charges. */

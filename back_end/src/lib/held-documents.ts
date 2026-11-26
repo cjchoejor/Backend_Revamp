@@ -21,6 +21,8 @@ export type HeldDocumentReason =
   | "DATE_MOVE"
   /** Rooms split off to a booking of their own (2026-10-14) — both bookings' papers. */
   | "ROOM_SPLIT"
+  /** A room added to a stay in house, as a stay of its own on the enquiry (2026-11-26). */
+  | "ROOM_ADDED"
   /**
    * The desk's own Reserve (2026-10-29, operator: "the confirmation voucher is sent automatically
    * when I click Reserve the booking, but that should also be optional like how I did for

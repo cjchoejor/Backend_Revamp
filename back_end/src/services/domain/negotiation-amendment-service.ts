@@ -48,6 +48,7 @@
  * named), the dates in `ENTRY.NEGOTIATION_CONFIGURATION_AMENDED`'s before / after, the line in the
  * AmendmentEventRecord's summary, and `ENTRY.INTAKE_UPDATED` from the intake write itself.
  */
+import { readApprovalRoles } from "../../lib/approval-roles.js";
 import type { PrismaClient, Prisma as PrismaNS } from "@prisma/client";
 import { QuotationState, Stage, EntryStatus } from "@prisma/client";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -418,7 +419,13 @@ async function amendNegotiationConfigurationInner(
   let mayApply = true;
   let whyNot: string | null = null;
   try {
-    enforceNegotiationAmendmentAuthority({ actorLevel: actor.actorLevel, quotationSent, quotationAccepted });
+    const who = await readApprovalRoles(prisma as never, "NEGOTIATION_CHANGE");
+    enforceNegotiationAmendmentAuthority({
+      actorLevel: actor.actorLevel,
+      quotationSent,
+      quotationAccepted,
+      approvers: { may: who.levels.includes(actor.actorLevel), words: who.words },
+    });
   } catch (e) {
     mayApply = false;
     whyNot = (e as Error).message;

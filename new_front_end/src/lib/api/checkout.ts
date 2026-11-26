@@ -101,7 +101,7 @@ export async function initiateSettlement(
 export async function recordFolioRefund(
   session: Session,
   folioId: string,
-  body: { amount: number; paymentMethod: string; reference?: string; reason: string; bankName?: string; journalNumber?: string },
+  body: { amount: number; paymentMethod: string; reference?: string; reason: string; bankName?: string; journalNumber?: string; billingModel?: string },
 ) {
   return apiRequest<unknown>(`/api/folios/${folioId}/refunds`, { method: "POST", session, body });
 }

@@ -12,6 +12,7 @@
  */
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { useEffect, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -38,7 +39,7 @@ export function payLaterWords(d: { payBy: CheckInPayBy | null; dueBy: string | n
 export function CheckInBalance({ entry, onChanged, tz }: { entry: EntryDetail; onChanged?: () => void; tz?: string }) {
   const { session } = useSession();
   const qc = useQueryClient();
-  const fom = atLeast(session?.actorLevel, "L2");
+  const fom = useMayApprove("CHECKIN_PAY_LATER", atLeast(session?.actorLevel, "L2")).may;
   const standing = useCheckInPayment(entry.id, entry.updatedAt, { enabled: !!entry.folio }).data;
 
   const [amount, setAmount] = useState("");

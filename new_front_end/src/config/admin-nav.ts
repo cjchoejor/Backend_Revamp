@@ -98,6 +98,7 @@ export const adminNavGroups: AdminNavGroup[] = [
       { title: "House rules", href: "/admin/policies", icon: Workflow, description: "The hotel's rules: time limits, money, children, groups" },
       { title: "Cancellation policies", href: "/admin/cancellation-policies", icon: Receipt, description: "What a guest pays when they cancel or do not come" },
       { title: "Kinds of change", href: "/admin/modes", icon: Workflow, description: "The steps each kind of change to a booking goes through" },
+      { title: "Who approves", href: "/admin/approvals", icon: Workflow, description: "Who may add or remove a room, let a guest leave owing, waive a fee and the rest" },
     ],
   },
   {

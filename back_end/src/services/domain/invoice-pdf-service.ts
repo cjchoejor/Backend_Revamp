@@ -915,7 +915,7 @@ export type TaxInvoiceRenderInput = {
   /** Superseded on the face by the lines table (each room's nights are on its row); kept for callers. */
   roomsLine?: string | null;
   /** The issued original's reference + date. Null renders the DRAFT. */
-  issued: { invoiceRef: string; issuedAt: Date; issuedBy?: string | null } | null;
+  issued: { invoiceRef: string; issuedAt: Date; issuedBy?: string | null; replaces?: string | null } | null;
   /** The instant the figures were read — the draft's "Position as at". */
   asAt: Date;
   /** Configured rates — used for the labels only when the ledger carries no tax to derive them from. */
@@ -1044,6 +1044,8 @@ export function composeTaxInvoiceHtml(input: TaxInvoiceRenderInput): string {
       heading: "Invoice",
       rows: [
         { k: "Invoice no", v: input.issued?.invoiceRef ?? "Allocated at issue", strong: !!input.issued, mono: !!input.issued },
+        // A tax invoice issued after a charge was corrected on a settled bill (2026-11-26) names the one it replaces.
+        input.issued?.replaces ? { k: "Replaces", v: input.issued.replaces, mono: true } : null,
         draft ? { k: "Position as at", v: formatDocDateTimeLocal(input.asAt) } : { k: "Date of issue", v: formatDocDateLocal(input.issued!.issuedAt) },
         { k: "Booking", v: input.bookingRef, red: true },
         input.folioId ? { k: "Folio", v: input.folioId, mono: true } : null,
@@ -1303,7 +1305,12 @@ export async function generateOrLoadInvoicePdf(
     stay: { checkIn, checkOut, nights },
     stayOutcome: await stayOutcomeRows(prisma, inv.entryId).catch(() => null),
     roomsLine: assigned.length ? roomsWithNightsLine(assigned) : null,
-    issued: { invoiceRef, issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now, issuedBy: preparedByName || null },
+    issued: {
+      invoiceRef,
+      issuedAt: inv.issuedAt ?? inv.dispatchedAt ?? now,
+      issuedBy: preparedByName || null,
+      replaces: typeof (inv.metadata as Record<string, unknown> | null)?.replaces === "string" ? ((inv.metadata as Record<string, unknown>).replaces as string) : null,
+    },
     asAt: now,
     currency: inv.folio?.lines?.[0]?.currency ?? "BTN",
     gstRate,

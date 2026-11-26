@@ -1,4 +1,5 @@
 import { assignedRoomNights, roomsWithNightsLine, type NightsMode } from "../../lib/room-nights-for-entry.js";
+import { sleptRows } from "../../lib/rooms-in-use.js";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
@@ -115,9 +116,10 @@ function stayFrame(entry: Context): { checkIn: Date | null; checkOut: Date | nul
   return { checkIn, checkOut, nights };
 }
 
-/** Distinct room numbers of the plan, numeric order — the statements' "Rooms" row. */
+/** Distinct room numbers the guest slept in, numeric order — the statements' "Rooms" row. A room
+ *  left the evening it was reached was never slept in (lib/rooms-in-use.ts). */
 function roomNumbersOf(entry: Context): string[] {
-  return Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((n): n is string => !!n))).sort(
+  return Array.from(new Set(sleptRows(entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((n): n is string => !!n))).sort(
     (a, b) => a.localeCompare(b, undefined, { numeric: true }),
   );
 }
@@ -208,7 +210,10 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
     invoice: null,
   };
 
-  const masterAvailable = !!folio && hasLines && (live || !!sealedAt);
+  // A bill one payer's share has settled is neither open nor sealed while the guest is still at the
+  // desk (2026-11-26): its master bill and draft tax invoice read the bill as it stands.
+  const shareSettled = !!folio && !live && !sealedAt && (folio.state === "OUTSTANDING" || folio.state === "SETTLED");
+  const masterAvailable = !!folio && hasLines && (live || !!sealedAt || shareSettled);
   const master: FolioDocumentEntry = {
     kind: "master-bill",
     title: "Master bill",
@@ -225,7 +230,7 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
     invoice: null,
   };
 
-  const draftAvailable = !finalInvoice && !!folio && hasLines && (live || !!sealedAt);
+  const draftAvailable = !finalInvoice && !!folio && hasLines && (live || !!sealedAt || shareSettled);
   const tax: FolioDocumentEntry = {
     kind: "tax-invoice",
     title: "Tax invoice",

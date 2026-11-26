@@ -889,9 +889,14 @@ export async function walkPiece(
     carriedDiscount: { discountPercent: number; discountBasis: string } | null;
     priorTerms: Record<string, unknown> | null;
     reason: string;
+    /** A room added to a stay in house (2026-11-26): the same walk, its notes in its own words. */
+    purpose?: "SPLIT" | "ADD_ROOM";
   },
 ): Promise<PieceOutcome> {
   const { entry, stage, target, newId, piece, reason } = args;
+  const adding = args.purpose === "ADD_ROOM";
+  const why = adding ? `${piece.words} added to ${entry.id}: ${reason}` : `Split off ${entry.id}: ${reason}`;
+  const heldReason = adding ? ("ROOM_ADDED" as const) : ("ROOM_SPLIT" as const);
   const notes: string[] = [];
   const heldDocuments: PieceOutcome["heldDocuments"] = [];
   let quotationId: string | null = null;
@@ -928,7 +933,9 @@ export async function walkPiece(
       const approved = ((args.priorTerms?.discountAuthority as { approvedLevel?: string } | undefined)?.approvedLevel ?? null) as Actor["actorLevel"] | null;
       const level = args.carriedDiscount && approved && (RANK[approved] ?? 0) > (RANK[actor.actorLevel] ?? 0) ? approved : actor.actorLevel;
       const q = await createQuotation(prisma, newId, actor.actorId, {
-        notes: `${piece.words} split off ${entry.id} to ${fmtDay(piece.checkIn)} – ${fmtDay(piece.checkOut)} (${reason})`,
+        notes: adding
+          ? `${piece.words} added to ${entry.id} for ${fmtDay(piece.checkIn)} – ${fmtDay(piece.checkOut)} (${reason})`
+          : `${piece.words} split off ${entry.id} to ${fmtDay(piece.checkIn)} – ${fmtDay(piece.checkOut)} (${reason})`,
         roomCompositions: piece.compositions,
         ...(args.carriedDiscount ? { requestedDiscount: args.carriedDiscount } : {}),
         actorLevel: level,
@@ -939,7 +946,7 @@ export async function walkPiece(
       // The rooms are marked while the walk runs on, so nobody takes them between the steps; the
       // committed hold takes the marker over at Set up.
       await step("PROVISIONAL_BLOCK", async () => {
-        await placeSpeculativeHold(prisma, newId, actor, { roomId: anchor, commercialBasis: `Split off ${entry.id}: ${reason}` }).catch((e) => {
+        await placeSpeculativeHold(prisma, newId, actor, { roomId: anchor, commercialBasis: why }).catch((e) => {
           notes.push(`The rooms were not marked on the way: ${errorMessage(e)}`);
         });
       });
@@ -959,7 +966,7 @@ export async function walkPiece(
         );
       });
       await step("HOLD", async () =>
-        s3HoldService.placeCommittedHold(prisma, newId, actor, { roomId: anchor, commercialJustification: `Split off ${entry.id}: ${reason}` }),
+        s3HoldService.placeCommittedHold(prisma, newId, actor, { roomId: anchor, commercialJustification: why }),
       );
       if (stage === Stage.S3 && !blocked) {
         const folio = await prisma.folio.findUnique({ where: { entryId: newId }, select: { id: true } });
@@ -971,7 +978,7 @@ export async function walkPiece(
             entryId: newId,
             kind: "PROFORMA",
             documentId: proforma.id,
-            reason: "ROOM_SPLIT",
+            reason: heldReason,
             heldBy: actor.actorId,
             heldByLevel: actor.actorLevel,
             stage: Stage.S3,
@@ -990,7 +997,7 @@ export async function walkPiece(
             entryId: newId,
             kind: "CONFIRMATION_VOUCHER",
             documentId: reserved.reservation.id,
-            reason: "ROOM_SPLIT",
+            reason: heldReason,
             heldBy: actor.actorId,
             heldByLevel: actor.actorLevel,
             stage: Stage.S4,
@@ -1009,7 +1016,9 @@ export async function walkPiece(
           if (voucher && voucher.acknowledgementStatus !== "RECEIVED") {
             await recordCommunicationAcknowledgement(prisma, voucher.id, actor, {
               method: "VERBAL",
-              verbatimNote: `${piece.words} split off ${entry.id} to these dates at the guest's request: ${reason}.`,
+              verbatimNote: adding
+                ? `${piece.words} added to ${entry.id} at the guest's request: ${reason}.`
+                : `${piece.words} split off ${entry.id} to these dates at the guest's request: ${reason}.`,
             });
           }
           const windowDays = Number(await requireActiveConfigValue<number>(prisma, "preArrival.windowDays").catch(() => 1)) || 1;

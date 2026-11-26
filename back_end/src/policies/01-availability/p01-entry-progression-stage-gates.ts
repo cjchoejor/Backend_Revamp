@@ -209,19 +209,22 @@ export function enforceNegotiationAmendmentAuthority(input: {
   actorLevel: ActorLevel;
   quotationSent: boolean;
   quotationAccepted: boolean;
+  /** Who may, from the admin console (2026-11-26, approvals.negotiationChange.roles); absent = the FOM and above. */
+  approvers?: { may: boolean; words: string } | null;
 }) {
-  const elevated = input.actorLevel === "L2" || input.actorLevel === "L3" || input.actorLevel === "L4";
+  const elevated = input.approvers ? input.approvers.may : input.actorLevel === "L2" || input.actorLevel === "L3" || input.actorLevel === "L4";
   if (elevated) return;
+  const who = input.approvers?.words ?? "the FOM";
   if (input.quotationAccepted) {
     throw new PolicyGateBlockedError(
       "AUTH_REQUIRED_L2",
-      "The guest has ACCEPTED this quotation — changing the rooms or the party now needs the FOM's approval.",
+      `The guest has ACCEPTED this quotation — changing the rooms or the party now needs the approval of ${who}.`,
     );
   }
   if (input.quotationSent) {
     throw new PolicyGateBlockedError(
       "AUTH_REQUIRED_L2",
-      "The quotation has gone to the guest — changing the rooms or the party now needs the FOM.",
+      `The quotation has gone to the guest — changing the rooms or the party now needs ${who}.`,
     );
   }
 }

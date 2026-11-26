@@ -1095,6 +1095,18 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
   margin: 4px 0 2px -74px;
   padding-left: 8px;
 }
+/* History: what an act decided, one fact a line (2026-11-26, operator: "inquiry should be showing
+   … what the user has chosen or inputs … negotiation … meal plans, rates, adults and children"). */
+.ds .hist-facts:not(.desk-root *) {
+  display: grid;
+  gap: 1px;
+  margin: 3px 0 2px;
+  padding-left: 9px;
+  border-left: 2px solid var(--line-2);
+  font-size: var(--t-sm);
+  color: var(--ink-2);
+  line-height: 1.45;
+}
 
 /* House chart: a bar dragged sideways lights the nights the stay would move to (2026-10-13). */
 .ds .rchart .tape thead th.drop-night {
@@ -1230,7 +1242,9 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
    alerts the system sent by day. Page: notifications/page.tsx under the (ds) routes. */
 /* The bell panel: its heading and See all notifications on one row, the button at the right. */
 .ds .ntf-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); }
-.ds .ntf-head h4 { margin: 0; }
+.ds .ntf-head h4 { margin: 0 auto 0 0; }
+/* Sound on / off sits beside See all notifications (2026-11-26). */
+.ds .ntf-head .btn[aria-pressed="false"] { color: var(--ink-3); }
 .ds .ntf-head .btn { flex-shrink: 0; }
 .ds .ntf-group { scroll-margin-top: 72px; }
 .ds .ntf-jump { margin-left: auto; }
@@ -1693,6 +1707,8 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .file .ftab .tab-n { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .ds .file .ftab .tab-n.req { background: var(--warning); border-color: var(--warning); color: #fff; }
 .ds .file .ftab .tab-n.note { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* An open to-do beside the notes, its own colour (2026-11-26, operator: "in 2 colors for notes as well"). */
+.ds .file .ftab .tab-n.todo { background: var(--warning); border-color: var(--warning); color: #fff; }
 .ds .file .ftab .tab-n.stop { background: var(--danger); border-color: var(--danger); color: #fff; }
 .ds .file .ftab .tab-n.warn { background: var(--warning); border-color: var(--warning); color: #fff; }
 .ds .file .ftab .tab-n.soft-warn { background: var(--warning-soft); border-color: var(--warning-line); color: var(--warning); }
@@ -3107,3 +3123,95 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .apt-rate-table tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
 .ds .apt-periods { margin: 4px 0 0; padding: 0; list-style: none; font-size: var(--t-sm); }
 .ds .apt-periods li { display: flex; justify-content: space-between; align-items: center; gap: var(--s2); padding: 3px 0; border-top: 1px dashed var(--line); }
+
+/* Waiting for your answer (2026-11-26, operator: "as a user the fom can't see anything she has to work
+   with when she comes into the page, we need something prominent for such cases"): the first thing in
+   the booking's work column for the FOM, GM and admin — amber, a firm edge, a mark, one row per ask
+   with its act at the right. It arrives with one soft pulse (none under reduced motion). */
+.ds .fom-wait { border: 2px solid var(--warning); border-left-width: 6px; background: var(--warning-soft); border-radius: var(--r-card, 6px); padding: var(--s3) var(--s4); margin-bottom: var(--s4); animation: ds-fom-wait-in 1.4s ease-out 1; }
+.ds .fom-wait h3 { display: flex; align-items: center; gap: var(--s2); margin: 0 0 var(--s2); font-size: 18px; font-weight: 700; color: var(--ink); }
+.ds .fom-wait-mark { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--warning); color: #fff; font-size: 15px; font-weight: 800; flex-shrink: 0; }
+.ds .fom-wait-n { display: inline-grid; place-items: center; min-width: 24px; height: 24px; padding: 0 7px; border-radius: 12px; background: var(--ink); color: #fff; font-size: 13px; font-weight: 700; }
+.ds .fom-wait-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s3) 0; border-top: 1px solid var(--warning-line); }
+.ds .fom-wait h3 + .fom-wait-row, .ds .fom-wait h3 + * > .fom-wait-row:first-child { border-top: 0; padding-top: var(--s1); }
+.ds .fom-wait-row > span:last-child, .ds .fom-wait-row > .btn:last-child { margin-left: auto; }
+.ds .fom-wait-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; min-width: 0; font-size: var(--t-base); }
+.ds .fom-wait-text b { font-size: 16px; font-weight: 700; }
+@keyframes ds-fom-wait-in {
+  0% { box-shadow: 0 0 0 0 var(--warning-line); }
+  25% { box-shadow: 0 0 0 5px var(--warning-line); }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .ds .fom-wait { animation: none; } }
+
+/* Leaving early and a room added, at Stay (2026-11-26). Rooms picked as buttons with a tick; the
+   figures in a table and one line under it; a room due to leave today amber, its Release green. */
+.ds .leaving { display: flex; flex-direction: column; gap: var(--s3); }
+/* The booking's rooms as a table to tick (2026-11-26, operator: "display it in a tabular format, showing
+   booked dates"): every row the same at rest, a ticked row the accent's tint with a 3px edge — one look,
+   whichever row, whatever was clicked. */
+.ds .leaving-pick, .ds .ar-table { margin: var(--s2) 0 0; }
+.ds .leaving-pick tbody tr, .ds .ar-table tbody tr { cursor: pointer; }
+.ds .leaving-pick tbody tr:hover td, .ds .ar-table tbody tr:hover td { background: var(--row-hover, var(--surface-2)); }
+.ds .leaving-pick tbody tr.on td, .ds .ar-table tbody tr.on td { background: var(--accent-soft); }
+.ds .leaving-pick tbody tr.on td:first-child, .ds .ar-table tbody tr.on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.ds .leaving-pick tbody tr.shut, .ds .ar-table tbody tr.shut { cursor: default; color: var(--ink-3); }
+.ds .leaving-pick tbody tr.shut:hover td, .ds .ar-table tbody tr.shut:hover td { background: transparent; }
+.ds .lp-tick { width: 34px; text-align: center; }
+.ds .lp-tick input { width: 17px; height: 17px; accent-color: var(--accent); cursor: pointer; }
+.ds .lp-tick input:disabled { cursor: not-allowed; }
+.ds .leaving-pick .num, .ds .ar-table .num { text-align: right; }
+.ds .ar-wrap { overflow-x: auto; max-height: 440px; overflow-y: auto; border: 1px solid var(--line); border-radius: var(--r-control); }
+.ds .ar-table { margin: 0; }
+.ds .ar-table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.ds .ar-night { white-space: nowrap; text-align: center; }
+.ds .ar-cell { text-align: center; font-size: 12.5px; white-space: nowrap; }
+.ds .ar-cell.free { color: var(--success); font-weight: 600; }
+.ds .ar-cell.dirty { color: var(--warning-ink, var(--warning)); font-weight: 600; }
+.ds .ar-cell.taken { color: var(--danger); }
+.ds .ar-cell.out { color: var(--ink-3); }
+.ds .fom-wait.fw-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.ds .fom-wait-acts { display: inline-flex; gap: var(--s2); margin-left: auto; flex-wrap: wrap; }
+.ds .leaving-fig { min-height: 38px; display: flex; align-items: center; font-size: var(--t-base); }
+.ds .leaving-table { margin-top: 0; }
+.ds .leaving-table .num { text-align: right; }
+.ds .leaving-sum { display: flex; flex-wrap: wrap; gap: var(--s4); justify-content: flex-end; margin: var(--s2) 0; font-size: 15px; }
+.ds .leaving-sum b { font-size: 16px; }
+.ds .leaving-waive { display: inline-flex; align-items: center; gap: 8px; margin: var(--s2) 0; font-weight: 500; cursor: pointer; }
+.ds .leaving-what { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.ds .leaving-row { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .leaving-row:first-child { border-top: 0; }
+.ds .leaving-row.due { border: 2px solid var(--warning); border-left-width: 6px; background: var(--warning-soft); border-radius: var(--r-control); padding: var(--s2) var(--s3); }
+.ds .leaving-row > .btn:last-child { margin-left: auto; }
+.ds .add-room-type { padding: var(--s2) 0; border-top: 1px solid var(--line); }
+.ds .add-room-type:first-of-type { border-top: 0; }
+.ds .add-room-type-head { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
+.ds .add-room-type-head b { font-size: 15px; }
+.ds .add-room-type .leaving-rooms { margin-top: var(--s2); }
+
+/* The Keys card as a table (2026-11-26): the rooms in use, then apart the rooms the guest has left. */
+.ds .keys-table td {
+  vertical-align: middle;
+}
+.ds .keys-table .keys-act {
+  text-align: right;
+  white-space: nowrap;
+}
+.ds .keys-table tr.keys-sep td {
+  padding-top: var(--s3);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3, #6b6f6c);
+  background: var(--paper, #f2f3f0);
+}
+.ds .keys-table tr.keys-left td {
+  color: var(--ink-3, #6b6f6c);
+}
+
+/* The Guests tab's editor in a pop-up (2026-11-26): the guest table needs the room the panel lacks. */
+.ds .dialog.guests-editor { width: min(1240px, calc(100vw - 32px)); max-width: 100%; position: relative; }
+.ds .dialog.guests-editor > .dialog-x { z-index: 2; }
+.ds .dialog.guests-editor .body { padding-top: var(--s4); }
+.ds .guests-view .gv-count { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.ds .guests-view .gv-count .gv-acts { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
+.ds .guests-view .gv-count .gv-acts .gv-all { margin: 0; }

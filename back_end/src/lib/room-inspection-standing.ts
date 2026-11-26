@@ -1,5 +1,6 @@
 import type { Prisma, PrismaClient, RoomInspectionRecord } from "@prisma/client";
 import { effectiveCheckOutDate } from "./stay-dates.js";
+import { rowsAtCheckout } from "./rooms-in-use.js";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -45,10 +46,8 @@ export type BookingInspectionStanding = {
 const W9 = "POST_CHECKOUT_INSPECTION_W9";
 const LAPSE_EVENT = "POST_CHECKOUT_INSPECTION.WINDOW_EXPIRED";
 
-const ymd = (d: Date) => d.toISOString().slice(0, 10);
-
-/** The rooms the guest leaves at check-out, in room-number order. Every room the booking ever
- *  held when none of its rows reach the checkout (a fallback that never hides a room). */
+/** The rooms the guest leaves at check-out, in room-number order. Every room the booking slept
+ *  in when none of its rows reach the checkout (a fallback that never hides a room). */
 export async function roomsToInspect(db: DbClient, entryId: string): Promise<RoomToInspect[]> {
   const entry = await db.entry.findUnique({
     where: { id: entryId },
@@ -57,23 +56,17 @@ export async function roomsToInspect(db: DbClient, entryId: string): Promise<Roo
       checkOutDate: true,
       actualCheckOutDate: true,
       reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } },
-      roomAssignments: { select: { roomId: true, endDate: true, room: { select: { roomNumber: true } } } },
+      roomAssignments: { select: { roomId: true, startDate: true, endDate: true, room: { select: { roomNumber: true } } } },
     },
   });
   if (!entry) return [];
-  const checkout = effectiveCheckOutDate(entry);
-  const byRoom = new Map<string, { roomNumber: string; reachesCheckout: boolean }>();
-  for (const a of entry.roomAssignments) {
-    // A row with no end runs to checkout; a dated row reaches it when it ends on (or after) the
-    // checkout morning — its end is the exclusive move-out morning.
-    const reaches = !a.endDate || !checkout || ymd(a.endDate) >= ymd(checkout);
-    const prior = byRoom.get(a.roomId);
-    byRoom.set(a.roomId, { roomNumber: a.room.roomNumber, reachesCheckout: (prior?.reachesCheckout ?? false) || reaches });
-  }
-  const all = [...byRoom.entries()].map(([roomId, r]) => ({ roomId, roomNumber: r.roomNumber, reaches: r.reachesCheckout }));
-  const atCheckout = all.filter((r) => r.reaches);
-  return (atCheckout.length ? atCheckout : all)
-    .map(({ roomId, roomNumber }) => ({ roomId, roomNumber }))
+  // The rooms the guest leaves at check-out — the one rule every screen and gate names them by
+  // (lib/rooms-in-use.ts): a room left mid-stay, or one never slept in, is not inspected here.
+  const rows = rowsAtCheckout(entry.roomAssignments, effectiveCheckOutDate(entry));
+  const byRoom = new Map<string, string>();
+  for (const a of rows) if (!byRoom.has(a.roomId)) byRoom.set(a.roomId, a.room.roomNumber);
+  return [...byRoom.entries()]
+    .map(([roomId, roomNumber]) => ({ roomId, roomNumber }))
     .sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
 }
 

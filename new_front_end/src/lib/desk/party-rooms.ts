@@ -334,27 +334,53 @@ export function currentRoomAssignments<T extends { endDate?: string | null }>(
   return rows.filter((a) => !a.endDate || String(a.endDate).slice(0, 10) > hotelToday);
 }
 
+type InUseRow = { startDate?: string | null; endDate?: string | null };
+type InUseEntry<T> = {
+  currentStage?: string | null;
+  checkOutDate?: string | null;
+  actualCheckOutDate?: string | null;
+  reservation?: { frozenCheckOutDate?: string | null } | null;
+  roomAssignments?: T[] | null;
+};
+
+/** A row that starts and ends the same day: a room the guest left before sleeping a night in it. */
+export function isZeroNightRow(r: InUseRow): boolean {
+  return !!r.startDate && !!r.endDate && String(r.startDate).slice(0, 10) >= String(r.endDate).slice(0, 10);
+}
+
 /**
- * The rooms the booking is in, as the desk should name them — the rule above, but **in-house
- * only**.
+ * The rooms the booking is in, as every screen names them — the backend's `rowsInUse`
+ * (back_end/src/lib/rooms-in-use.ts), keep the two in step (2026-11-26, operator: the Today list
+ * named 4 rooms on a 3-room booking — "it is showing the historical room"):
  *
- * Before check-in a dated row is a PLAN for particular nights, not an occupancy that has ended:
- * a room change at Arrival or Check-in DELETES the pre-occupancy rows rather than end-dating
- * them, so there is no remnant to drop, while a booking whose dates have slipped into the past
- * still has its rooms and must still show them. Reading the rule at every step emptied those
- * bookings' rooms entirely.
+ * - **In house (S7)**: the rooms not yet left — a row with no end, or one ending after the hotel's
+ *   today. Before check-in a dated row is a PLAN for particular nights, not an occupancy that has
+ *   ended (a room change at Arrival or Check-in deletes those rows), so the rule waits for S7.
+ * - **At Check-out and after (S8, S9)**: the rooms the guest leaves at check-out — the rows that
+ *   run to the checkout morning (the effective one, after an early departure).
+ * - **Otherwise**: every room the booking sleeps in.
  *
- * If every row has ended — a stay already run out — the rows stand, because naming no room at
- * all says less than naming the ones it had.
+ * A zero-night row is never one of them. When a rule leaves nothing, the wider set stands — naming
+ * no room says less than naming the ones it had. Until the hotel's day is known nothing is dropped
+ * in house: over-showing a room is the safe way to be wrong for a second.
  */
-export function roomsInUseFor<T extends { endDate?: string | null }>(
-  entry: { currentStage?: string | null; roomAssignments?: T[] | null },
-  hotelToday: string | null,
-): T[] {
+export function roomsInUseFor<T extends InUseRow>(entry: InUseEntry<T>, hotelToday: string | null): T[] {
   const rows = entry.roomAssignments ?? [];
-  if (entry.currentStage !== "S7") return [...rows];
-  const live = currentRoomAssignments(rows, hotelToday);
-  return live.length ? live : [...rows];
+  const slept = rows.filter((r) => !isZeroNightRow(r));
+  const base = slept.length ? slept : [...rows];
+  const booked = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? null;
+  const actual = entry.actualCheckOutDate ?? null;
+  const checkout = (actual && (!booked || actual.slice(0, 10) < booked.slice(0, 10)) ? actual : booked)?.slice(0, 10) ?? null;
+  const atCheckout = () => {
+    if (!checkout) return base;
+    // A row that starts and ends on the checkout day counts: moved and left the same day.
+    const at = rows.filter((r) => !r.endDate || String(r.endDate).slice(0, 10) >= checkout);
+    return at.length ? at : base;
+  };
+  if (entry.currentStage === "S8" || entry.currentStage === "S9") return atCheckout();
+  if (entry.currentStage !== "S7" || !hotelToday) return base;
+  const live = base.filter((r) => !r.endDate || String(r.endDate).slice(0, 10) > hotelToday);
+  return live.length ? live : atCheckout();
 }
 
 /**

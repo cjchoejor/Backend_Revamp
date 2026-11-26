@@ -143,6 +143,8 @@ export function paymentWords(p: {
 }): { how: string; detail: string | null } {
   const method = p.method ? (METHOD_WORDS[p.method] ?? p.method.replace(/_/g, " ").toLowerCase().replace(/^\w/, (c) => c.toUpperCase())) : "Payment";
   if (p.tripMove) return { how: p.direction === "OUT" ? "Moved to another stay of the trip" : "Moved from another stay of the trip", detail: null };
+  // A charge on the agency's share corrected after settlement, before the agency paid (2026-11-26).
+  if (p.direction === "OUT" && p.method === "VOUCHER") return { how: "Agency voucher reduced", detail: null };
   const how = [p.direction === "OUT" ? `Refund · ${method.toLowerCase()}` : method, p.bankName].filter(Boolean).join(" · ");
   // A cash receipt's reference is stored as "CASH:123"; print the number alone.
   const ref = p.reference ? p.reference.replace(/^[A-Z_]+:/, "") : null;

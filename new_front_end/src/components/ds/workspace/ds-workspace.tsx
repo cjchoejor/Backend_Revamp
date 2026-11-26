@@ -124,6 +124,7 @@ import { S8CheckOut, S8_PANES } from "@/components/ds/steps/s8-checkout";
 import { S9Closed, S9_PANES, inspectionsOwedAtClosed } from "@/components/ds/steps/s9-closed";
 import { Overlay, atLeast, useRefreshEntry, useStepPane } from "@/components/ds/steps/kit";
 import { ChangeConfiguration } from "@/components/ds/steps/s2-configuration";
+import { WaitingForYourAnswer } from "@/components/ds/workspace/waiting-for-you";
 import { blockRoomsForReserve, declineEntry } from "@/lib/api/reservation-setup";
 const atLeastFom = (level?: string | null) => atLeast(level, "L2");
 
@@ -499,6 +500,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const setSelectedRef = useRef(setSelected);
   setSelectedRef.current = setSelected;
   const stableSetSelected = useMemo(() => (n: number) => setSelectedRef.current(n), []);
+  // The latest goToCard, for Waiting for your answer: it moves to a step, then to a card on it.
+  const goToCardRef = useRef<(card?: string) => void>(() => undefined);
 
   const currentOrder = entry ? currentStepOrder(entry) : 1;
   const readyToConfirm = entry ? canConfirm(entry, { paymentSatisfied, totalReceived, requiredAmount, communications, earlierAdvanceAsked }) : false;
@@ -1384,6 +1387,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     };
     window.requestAnimationFrame(attempt);
   };
+  goToCardRef.current = goToCard;
 
   const viewingPast = (viewing < currentOrder || (sealed && step.key !== "closed")) && !confirmStepActive;
   // The panes this step declares — Stay's Night audit, Room change, … — and which one is open.
@@ -1785,17 +1789,28 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
       ) : null;
     }
     if (k === "notes") {
+      // Two colours (2026-11-26, operator): the notes in blue, the to-dos still open in amber —
+      // red, and saying so, once one is past its time.
       const c = notesQuery.data?.counts;
       if (!c) return null;
-      const n = c.notes + c.openTodos;
+      const onTime = c.openTodos - c.overdueTodos;
       return (
         <>
-          {n ? (
-            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}${c.openTodos ? ` · ${c.openTodos} to-do still open` : ""}`}>
-              {n}
+          {c.notes ? (
+            <span className="tab-n note" title={`${c.notes} ${c.notes === 1 ? "note" : "notes"}`}>
+              {c.notes}
             </span>
           ) : null}
-          {c.overdueTodos ? <span className="tab-n stop">{c.overdueTodos} late</span> : null}
+          {onTime > 0 ? (
+            <span className="tab-n todo" title={`${onTime} to-do${onTime === 1 ? "" : "s"} still open`}>
+              {onTime}
+            </span>
+          ) : null}
+          {c.overdueTodos ? (
+            <span className="tab-n stop" title={`${c.overdueTodos} to-do${c.overdueTodos === 1 ? "" : "s"} past its time`}>
+              {c.overdueTodos} late
+            </span>
+          ) : null}
         </>
       );
     }
@@ -1854,7 +1869,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const totalKind =
     billing?.headline.kind === "BILLED_SO_FAR"
       ? "billed so far"
-      : billing?.stayTotal?.earlyDeparture
+      : billing?.stayTotal?.earlyDeparture || billing?.stayTotal?.roomsLeaving?.length
         ? "shortened stay"
         : billing?.headline.frozen
           ? "as confirmed"
@@ -2272,10 +2287,26 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
               </div>
 
               <div className="canvas">
+                {/* What waits for the FOM's answer on this booking, first (2026-11-26). */}
+                {!sealed ? (
+                  <WaitingForYourAnswer
+                    entry={entry}
+                    row={listRow}
+                    tz={clock.tz}
+                    onGo={({ step: to, card }) => {
+                      if (to !== viewing) setSelected(to);
+                      window.setTimeout(() => goToCardRef.current(card), to !== viewing ? 250 : 0);
+                    }}
+                  />
+                ) : null}
                 {entry.earlyDeparture ? (
                   <div className="notice inert">
                     <span className="sm">
-                      <b>Left early on {fmtDay(entry.earlyDeparture.departureDate)}</b>
+                      {/* A departure recorded for a later day is still to come (2026-11-26). */}
+                      <b>
+                        {hotelToday && entry.earlyDeparture.departureDate.slice(0, 10) > hotelToday ? "Leaves early on" : "Left early on"}{" "}
+                        {fmtDay(entry.earlyDeparture.departureDate)}
+                      </b>
                     </span>
                   </div>
                 ) : null}

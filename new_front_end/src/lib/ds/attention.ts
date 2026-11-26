@@ -38,6 +38,8 @@ export type AttentionItem = {
   since?: number;
   /** A block whose time ended: the FOM's and GM's, drawn apart from the rest (2026-11-05). */
   critical?: boolean;
+  /** Waiting for the FOM's answer (2026-11-26): first on the FOM's and GM's bell after a critical row. */
+  fomDecides?: boolean;
   /** For folding identical work from one source (SS01 §3.2). */
   foldKey: string;
   sourceWord: string;
@@ -119,12 +121,28 @@ export function attentionItems(rows: DeskListRow[], now: number, hotelToday: str
     // later — the FOM, the GM or an admin answers; or the FOM's "during the stay, by …" has come.
     for (const d of r.checkInPaymentDeferrals ?? []) {
       if (d.status === "REQUESTED" && (step === 5 || step === 6)) {
-        push(r, { need: "Asks to pay the rest later · the FOM decides", band: "overdue", work: "money", since: new Date(d.requestedAt).getTime() });
+        push(r, { need: "Asks to pay the rest later · the FOM decides", band: "overdue", work: "money", fomDecides: true, since: new Date(d.requestedAt).getTime() });
       } else if (d.status === "APPROVED" && d.payBy === "DURING_STAY" && d.dueBy && step === 7) {
         const at = new Date(d.dueBy).getTime();
         if (at <= now) push(r, { need: "The rest of the bill is overdue", band: "overdue", work: "money", deadline: { label: "Due", at } });
         else if (at - now < DAY) push(r, { need: "The rest of the bill is due", band: "soon", work: "money", deadline: { label: "Due", at } });
       }
+    }
+
+    // Waiting for the FOM (2026-11-26): the guest asks to leave owing at Check-out, and a change
+    // to the booking prepared at Negotiation. The FOM, the GM or an admin answers either.
+    for (const o of r.leaveOwingRequests ?? []) {
+      if (step === 8) push(r, { need: "Asks to let the guest leave owing · the FOM decides", band: "overdue", work: "money", fomDecides: true, since: new Date(o.requestedAt).getTime() });
+    }
+    for (const c of r.chargeCorrectionRequests ?? []) {
+      if (step === 8 || step === 9) push(r, { need: "Asks to correct a charge · the FOM decides", band: "overdue", work: "money", fomDecides: true, since: new Date(c.requestedAt).getTime() });
+    }
+    for (const a of r.negotiationAmendmentRequests ?? []) {
+      if (step === 2) push(r, { need: "A change waits for the FOM's approval", band: "overdue", work: "holds", fomDecides: true, since: new Date(a.requestedAt).getTime() });
+    }
+    for (const x of r.roomRemovalRequests ?? []) {
+      const rooms = x.roomNumbers.length === 1 ? `Room ${x.roomNumbers[0]}` : `Rooms ${x.roomNumbers.join(", ")}`;
+      if (step === 7) push(r, { need: `Asks to remove ${rooms} · booked by mistake`, band: "overdue", work: "departures", fomDecides: true, since: new Date(x.requestedAt).getTime() });
     }
 
     // An arrival date that has passed before check-in

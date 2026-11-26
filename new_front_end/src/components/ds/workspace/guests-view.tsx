@@ -13,7 +13,7 @@
  * Check-out and Closed it is the record of who stayed. One thing can be done here (2026-11-25): a
  * guest filed on another guest's row is swapped back (`SwapGuestsDialog`).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Lock } from "lucide-react";
 import { useSession } from "@/hooks/use-session";
@@ -23,7 +23,8 @@ import { listRooms } from "@/lib/api/rooms";
 import { seatPartyByComposition } from "@/lib/desk/party-rooms";
 import { fmtDmy } from "@/lib/ds/format";
 import { IdPhotoViewerHost } from "@/components/desk/workspace/id-photo-viewer";
-import { partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
+import { IdentityProofBlock, partySlots, ProofThumb, UNTYPED_DOC_TYPES, type PartySlot } from "@/components/desk/workspace/identity-proof";
+import { Overlay, Tool } from "../steps/kit";
 import type { EntryDetail } from "@/types/api";
 import { Button } from "@/design-system";
 import { SwapGuestsDialog, type SwapCandidate } from "./guests-swap";
@@ -45,7 +46,57 @@ export function useGuestsRecorded(entry: EntryDetail | null, on: boolean) {
   return c ? { filled: c.filledSlots, total: c.totalSlots, done: c.satisfied } : null;
 }
 
+/**
+ * What is recorded, with the guest table one press away in a pop-up (2026-11-26, operator: the table
+ * squeezed into the narrow panel — "i think we need a pop up for this edit field"). An earlier cut the
+ * same day had it as an Edit sub-tab. The table is the same one as at Arrival and Check-in: type, photo,
+ * phone code and the reading of the ID; it is open from Arrival to Check-out, read-only once sealed.
+ */
 export function GuestsView({ entry }: { entry: EntryDetail }) {
+  const editable = entry.status === "ACTIVE" && ["S5", "S6", "S7", "S8"].includes(entry.currentStage);
+  const [editing, setEditing] = useState(false);
+  return (
+    <>
+      <GuestsInfo entry={entry} onEdit={editable ? () => setEditing(true) : undefined} />
+      {editing ? <GuestsEditDialog entry={entry} onClose={() => setEditing(false)} /> : null}
+    </>
+  );
+}
+
+/** The guest table in a wide pop-up over the page. Close, the X or Escape closes it; what is typed is saved as it is typed. */
+function GuestsEditDialog({ entry, onClose }: { entry: EntryDetail; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <Overlay>
+      <div className="scrim open" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+        <div className="dialog guests-editor" role="dialog" aria-modal="true" aria-label="The guests' details and ID" data-guests-editor="">
+          <button type="button" className="dialog-x" aria-label="Close" onClick={onClose}>
+            ×
+          </button>
+          <div className="body">
+            <Tool inert={false}>
+              <IdentityProofBlock entry={entry} title="The guests' details and ID" />
+            </Tool>
+          </div>
+          <div className="foot">
+            <span className="dlg-next">Each detail is saved as you leave its box.</span>
+            <Button kind="secondary" onClick={onClose}>
+              Close
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Overlay>
+  );
+}
+
+function GuestsInfo({ entry, onEdit }: { entry: EntryDetail; onEdit?: () => void }) {
   const { session } = useSession();
   const list = useQuery({
     queryKey: ["identity-proofs", entry.id],
@@ -136,12 +187,25 @@ export function GuestsView({ entry }: { entry: EntryDetail }) {
           </b>{" "}
           {coverage.totalSlots === 1 ? "guest" : "guests"} recorded
           {coverage.vipExempt ? <span className="sm"> · a VIP booking — not required</span> : null}
-          {allKeys.length > 1 ? (
-            <button type="button" className="gv-all" onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}>
-              {allOpen ? "Close all" : "Open all"}
-            </button>
-          ) : null}
+          {/* One line (2026-11-26, operator: the Edit button on a row of its own took "too much space"). */}
+          <span className="gv-acts">
+            {allKeys.length > 1 ? (
+              <button type="button" className="gv-all" onClick={() => setOpen(allOpen ? new Set() : new Set(allKeys))}>
+                {allOpen ? "Close all" : "Open all"}
+              </button>
+            ) : null}
+            {onEdit ? (
+              // Green while guests are still to be recorded — the next thing to do (UIappeal).
+              <Button compact className={coverage.satisfied ? undefined : "go"} kind={coverage.satisfied ? "secondary" : "primary"} onClick={onEdit}>
+                Edit
+              </Button>
+            ) : null}
+          </span>
         </div>
+      ) : onEdit ? (
+        <Button compact kind="secondary" onClick={onEdit}>
+          Edit details and IDs
+        </Button>
       ) : null}
       {groups.map(([roomId, rows]) => (
         <section key={roomId || "none"} className="gv-room">

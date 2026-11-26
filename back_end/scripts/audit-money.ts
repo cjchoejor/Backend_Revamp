@@ -654,15 +654,46 @@ async function main() {
 
   // A18 (2026-11-24): the agency's money recorded for a voucher is the voucher's own amount, on a
   // voucher. It is never a payment on the guest's bill — the voucher already counted there.
-  const collections = await prisma.voucherCollection.findMany({
-    select: { id: true, amount: true, paymentRecord: { select: { id: true, amount: true, paymentMethod: true, paymentDirection: true } } },
+  // A voucher made to cover less by a correction after settlement (2026-11-26) is owed less those.
+  const reductions = await prisma.paymentRecord.findMany({
+    where: { voucherReducedId: { not: null } },
+    select: { id: true, folioId: true, amount: true, paymentDirection: true, paymentMethod: true, voucherReducedId: true, createdAt: true },
   });
+  const reducedBy = new Map<string, Prisma.Decimal>();
+  for (const r of reductions) reducedBy.set(r.voucherReducedId!, (reducedBy.get(r.voucherReducedId!) ?? D(0)).add(D(r.amount)));
+  const collections = await prisma.voucherCollection.findMany({
+    select: { id: true, amount: true, recordedAt: true, paymentRecord: { select: { id: true, amount: true, paymentMethod: true, paymentDirection: true } } },
+  });
+  const collectedAt = new Map(collections.map((c) => [c.paymentRecord.id, c.recordedAt]));
   for (const c of collections) {
     const p = c.paymentRecord;
+    const owed = D(p.amount).sub(reducedBy.get(p.id) ?? D(0));
     if (p.paymentMethod !== "VOUCHER" || p.paymentDirection !== "IN") {
       add("CRITICAL", "A18_VOUCHER_MONEY", p.id, `voucher money recorded against a ${p.paymentDirection} ${p.paymentMethod ?? "?"} payment, not a voucher`);
-    } else if (!D(c.amount).eq(D(p.amount))) {
-      add("CRITICAL", "A18_VOUCHER_MONEY", p.id, `voucher ${money(D(p.amount))} but ${money(D(c.amount))} recorded as received for it`);
+    } else if (!D(c.amount).eq(owed)) {
+      add("CRITICAL", "A18_VOUCHER_MONEY", p.id, `voucher ${money(owed)} still covered but ${money(D(c.amount))} recorded as received for it`);
+    }
+  }
+  // A19 (2026-11-26): a voucher made to cover less points at a voucher on the same bill, is never
+  // more than the voucher, and comes before the agency's money for it — once the agency has paid,
+  // a correction is a refund to the agency, not a smaller voucher.
+  const voucherIds = [...new Set(reductions.map((r) => r.voucherReducedId!))];
+  const vouchers = voucherIds.length
+    ? await prisma.paymentRecord.findMany({ where: { id: { in: voucherIds } }, select: { id: true, folioId: true, amount: true, paymentDirection: true, paymentMethod: true } })
+    : [];
+  const voucherOf = new Map(vouchers.map((v) => [v.id, v]));
+  for (const r of reductions) {
+    const v = voucherOf.get(r.voucherReducedId!);
+    if (r.paymentDirection !== "OUT" || r.paymentMethod !== "VOUCHER") {
+      add("CRITICAL", "A19_VOUCHER_REDUCED", r.id, `a voucher reduction recorded as ${r.paymentDirection} ${r.paymentMethod ?? "?"}`);
+    } else if (!v || v.paymentDirection !== "IN" || v.paymentMethod !== "VOUCHER") {
+      add("CRITICAL", "A19_VOUCHER_REDUCED", r.id, `reduces ${r.voucherReducedId}, which is not a voucher`);
+    } else if (v.folioId !== r.folioId) {
+      add("CRITICAL", "A19_VOUCHER_REDUCED", r.id, `reduces a voucher on another bill (${v.folioId})`);
+    } else if ((reducedBy.get(v.id) ?? D(0)).gt(D(v.amount))) {
+      add("CRITICAL", "A19_VOUCHER_REDUCED", v.id, `reduced by ${money(reducedBy.get(v.id)!)}, more than the voucher's ${money(D(v.amount))}`);
+    } else if (collectedAt.has(v.id) && collectedAt.get(v.id)! < r.createdAt) {
+      add("CRITICAL", "A19_VOUCHER_REDUCED", r.id, `reduced after the agency's money for it was recorded — that is a refund to the agency`);
     }
   }
 

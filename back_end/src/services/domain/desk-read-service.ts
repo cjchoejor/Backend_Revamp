@@ -19,7 +19,8 @@ import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-ar
 import { withoutClocksOfRepliesOff } from "../../lib/reply-waits.js";
 import { readBookingRooms, roomUnitsOf, sealHasBookingRooms } from "../../lib/booking-rooms.js";
 import { currentPassSeal } from "./room-placement-service.js";
-import { utcDateOnly } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelTodayUtc, utcDateOnly } from "../../lib/stay-dates.js";
+import { rowsInUse } from "../../lib/rooms-in-use.js";
 
 type Db = PrismaClient;
 
@@ -76,7 +77,7 @@ const listSelect = {
       corporateAccount: { select: { id: true, displayName: true } },
     },
   },
-  reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true } },
+  reservation: { select: { id: true, confirmedAt: true, confirmationVoucherSent: true, frozenCheckInDate: true, frozenCheckOutDate: true } },
   folio: {
     select: {
       id: true,
@@ -115,6 +116,34 @@ const listSelect = {
   },
   // The rest of the bill at check-in (2026-10-29): a request the FOM must answer, or the FOM's
   // "pay during the stay by …" the desk is reminded on.
+  // Waiting for the FOM (2026-11-26): a guest asking to leave owing at Check-out, and a change
+  // to the booking prepared at Negotiation — the bell lists both for the FOM and the GM.
+  leaveOwingRequests: {
+    where: { status: "REQUESTED" },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, amountOwed: true, guestWords: true, requestedAt: true },
+  },
+  // A room booked by mistake the desk asks to remove (2026-11-26).
+  roomRemovalRequests: {
+    where: { status: "REQUESTED" },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, roomNumbers: true, reason: true, requestedAt: true },
+  },
+  // A charge on a settled bill the desk asks the FOM to correct (2026-11-26).
+  chargeCorrectionRequests: {
+    where: { status: "REQUESTED" },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, reason: true, requestedAt: true },
+  },
+  negotiationAmendmentRequests: {
+    where: { state: "REQUESTED" as const },
+    orderBy: { requestedAt: "desc" as const },
+    take: 1,
+    select: { id: true, summary: true, requestedAt: true },
+  },
   checkInPaymentDeferrals: {
     where: { status: { in: ["REQUESTED", "APPROVED"] } },
     orderBy: { createdAt: "desc" as const },
@@ -135,7 +164,8 @@ export type DeskListRow = Prisma.EntryGetPayload<{ select: typeof listSelect }> 
   parkReason: string | null;
   /** When the park runs out — the PARKING_FOLLOW_UP clock. */
   parkFollowUpAt: string | null;
-  /** Distinct room numbers the booking holds, in number order. */
+  /** The rooms the booking is in now, in number order (lib/rooms-in-use.ts): never a room left
+   *  mid-stay or one never slept in. */
   roomNumbers: string[];
   /**
    * The rooms a booking holds before they are handed out at Arrival (2026-11-24, client: "for walk
@@ -210,14 +240,13 @@ export async function listDeskBookings(
     if (typeof reason === "string" && reason.trim()) reasonOf.set(t.entryId, reason.trim());
   }
 
+  const hotelToday = hotelTodayUtc();
   return rows.map((r) => {
+    // The rooms the booking is in now — never a room left mid-stay or one never slept in
+    // (2026-11-26, lib/rooms-in-use.ts; the Today list named 4 rooms on a 3-room booking).
     const numbers = new Set<string>();
-    for (const a of r.roomAssignments) {
-      if (!a.room?.roomNumber) continue;
-      // A zero-night row is a room the guest left before sleeping a night in it (a change on the
-      // first night, 2026-09-19) — the booking never used it, so it is not one of its rooms.
-      if (a.startDate && a.endDate && a.startDate.getTime() >= a.endDate.getTime()) continue;
-      numbers.add(a.room.roomNumber);
+    for (const a of rowsInUse(r.currentStage, r.roomAssignments, { checkout: effectiveCheckOutDate(r), hotelToday })) {
+      if (a.room?.roomNumber) numbers.add(a.room.roomNumber);
     }
     const follow = r.timers.find((t) => t.timerCode === "PARKING_FOLLOW_UP");
     return {
@@ -579,7 +608,7 @@ export async function listDeskActivity(
 export const DESK_ALERTS_MAX = 400;
 
 /** What a sent alert was about (2026-10-23) — one word per writer in notification-service / W14. */
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "LEAVE_OWING_ASKED" | "CHARGE_CORRECTION_ASKED" | "ROOM_REMOVAL_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 /** Who an alert was routed to — the tiers `notification.routing.*` names. */
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
@@ -589,6 +618,9 @@ const ALERT_KIND: Record<string, DeskAlertKind> = {
   "NOTIFICATION.INTERIM_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_REMINDER_DISPATCHED": "PAYMENT_REMINDER",
   "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED": "PAY_LATER_ASKED",
+  "NOTIFICATION.LEAVE_OWING_REQUESTED": "LEAVE_OWING_ASKED",
+  "NOTIFICATION.CHARGE_CORRECTION_REQUESTED": "CHARGE_CORRECTION_ASKED",
+  "NOTIFICATION.ROOM_REMOVAL_REQUESTED": "ROOM_REMOVAL_ASKED",
   "NOTIFICATION.VIP_ARRIVAL_W14_PROCESSED": "VIP_ARRIVAL",
   "NOTIFICATION.BLOCK_TIME_ENDED": "BLOCK_ENDED",
   "NOTIFICATION.REFUND_DUE": "REFUND_DUE",
@@ -604,6 +636,30 @@ const num = (v: unknown): number | null => (typeof v === "number" && Number.isFi
  * it concerns as that booking stands NOW (so the desk can say whether it has moved on). Read-only;
  * the trace is the record and nothing here changes it.
  */
+/**
+ * What waits for the FOM, GM or an admin right now (2026-11-26, operator: "when front desk asks for
+ * permission, the notification on FOM or higher doesn't update unless I refresh the tab"). A small
+ * list the bell asks for every few seconds; when it changes the bell reads the bookings again.
+ */
+export async function listWaitingForFom(prisma: Db) {
+  const live = { status: "ACTIVE" as const };
+  const [owing, corrections, changes, payLater, removals] = await Promise.all([
+    prisma.leaveOwingRequest.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.chargeCorrectionRequest.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.negotiationAmendmentRequest.findMany({ where: { state: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.checkInPaymentDeferral.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+    prisma.roomRemovalRequest.findMany({ where: { status: "REQUESTED", entry: live }, select: { id: true, entryId: true, requestedAt: true } }),
+  ]);
+  const items = [
+    ...owing.map((r) => ({ kind: "LEAVE_OWING" as const, ...r })),
+    ...corrections.map((r) => ({ kind: "CHARGE_CORRECTION" as const, ...r })),
+    ...changes.map((r) => ({ kind: "NEGOTIATION_CHANGE" as const, ...r })),
+    ...payLater.map((r) => ({ kind: "PAY_LATER" as const, ...r })),
+    ...removals.map((r) => ({ kind: "ROOM_REMOVE" as const, ...r })),
+  ].map((r) => ({ kind: r.kind, id: r.id, entryId: r.entryId, requestedAt: r.requestedAt.toISOString() }));
+  return { items, key: items.map((i) => `${i.kind}:${i.id}`).sort().join("|") };
+}
+
 export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limit?: number }) {
   const limit = Math.min(Math.max(Math.trunc(q.limit ?? DESK_ALERTS_MAX), 1), DESK_ALERTS_MAX);
   const rows = await prisma.traceEvent.findMany({
@@ -656,6 +712,10 @@ export async function listDeskAlerts(prisma: Db, q: { from: Date; to: Date; limi
             ? { kind: "CHECKIN", remaining: num(p.remaining), remindersSent: num(p.remindersSent), dueBy: str(p.dueBy), billed: false }
             : r.eventType === "NOTIFICATION.CHECKIN_PAYMENT_DEFERRAL_REQUESTED"
               ? { kind: "PAY_LATER", remaining: num(p.stillToPay), remindersSent: null, dueBy: null, billed: false }
+              : r.eventType === "NOTIFICATION.LEAVE_OWING_REQUESTED"
+                ? { kind: "LEAVE_OWING", remaining: num(p.amountOwed), remindersSent: null, dueBy: null, billed: false }
+              : r.eventType === "NOTIFICATION.CHARGE_CORRECTION_REQUESTED"
+                ? { kind: "CHARGE_CORRECTION", remaining: num(p.netAfter), remindersSent: null, dueBy: null, billed: false }
               : r.eventType === "NOTIFICATION.REFUND_DUE"
                 ? { kind: "REFUND", remaining: num(p.amount), remindersSent: null, dueBy: null, billed: false }
               : null,

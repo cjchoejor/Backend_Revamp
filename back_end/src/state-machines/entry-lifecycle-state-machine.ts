@@ -1,6 +1,6 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { HandoffState, HandoffType, Stage } from "@prisma/client";
-import { NotFoundError, OptimisticLockError, ValidationError } from "../lib/errors.js";
+import { NotFoundError, OptimisticLockError, StageGateBlockedError, ValidationError } from "../lib/errors.js";
 import { requireActiveConfigValue } from "../lib/config-store.js";
 import { getRegistryPolicy } from "../lib/policy-registry-runtime.js";
 import { getTimerEngine } from "../services/infrastructure/timer-management-service.js";
@@ -497,6 +497,20 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
   // checkout day this is an early departure, which must be RECORDED (GM) before checking out -
   // it used to sail through here and bill the unstayed nights (ENT-20260814-0001, 2026-08-16).
   enforceDepartureNotBeforeBookedCheckout({ hotelToday, checkOut: checkout });
+  // A room recorded to leave early on a day that has come must be released first (2026-11-26): the
+  // check-out releases only the rooms the guest leaves at the end, so it would stay occupied for good.
+  {
+    const due = await prisma.roomDepartureRecord.findMany({
+      where: { entryId, state: "SCHEDULED", departureDate: { lte: hotelToday } },
+      select: { roomNumber: true },
+    });
+    if (due.length > 0) {
+      throw new StageGateBlockedError(
+        `Room${due.length > 1 ? "s" : ""} ${due.map((d) => d.roomNumber).join(", ")} ${due.length > 1 ? "were" : "was"} to leave early — release ${due.length > 1 ? "them" : "it"} under Change booking › Leaving early first`,
+        "ROOM_LEAVING_NOT_RELEASED",
+      );
+    }
+  }
 
   const h4 = entry.handoffs[0];
   const isSameDayDeparture = checkout ? utcDateOnly(checkout).getTime() === hotelToday.getTime() : false;

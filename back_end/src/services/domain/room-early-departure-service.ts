@@ -51,6 +51,93 @@ export type RoomDepartureOutcome = {
   nothingForgone: boolean;
 };
 
+type Tx = Prisma.TransactionClient;
+
+/**
+ * The room is out of the guest's hands: departed and waiting to be cleaned, its claim event
+ * written for this booking, its beds back to the usual setup, and the release traced. Shared by a
+ * room released with a payment and a room leaving early, the rest of the booking staying
+ * (2026-11-26) — so the two cannot release a room two ways.
+ */
+export async function releaseRoomFromStayTx(
+  tx: Tx,
+  args: {
+    roomId: string;
+    roomNumber: string | null;
+    entryId: string;
+    inquiryId: string | null;
+    actorId: string;
+    actorLevel: string;
+    reason: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<void> {
+  await tx.room.update({ where: { id: args.roomId }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
+  await markRoomDirtyOnDepartureTx(tx, args.roomId);
+  await tx.roomClaimStateEvent.create({
+    data: {
+      roomId: args.roomId,
+      entryId: args.entryId,
+      fromState: InventoryClaimState.OCCUPIED,
+      toState: InventoryClaimState.DEPARTED_DIRTY,
+      actorId: args.actorId,
+      reason: args.reason,
+    },
+  });
+  await resetRoomBedToUsualTx(tx, {
+    roomId: args.roomId,
+    entryId: args.entryId,
+    actorId: args.actorId,
+    reason: "Guest of this room left",
+    leaving: true,
+  });
+  await tx.traceEvent.create({
+    data: {
+      eventType: "ROOM.RELEASED_MID_STAY",
+      actorId: args.actorId,
+      actorLevel: args.actorLevel as "L1" | "L2" | "L3" | "L4",
+      entityType: "Room",
+      entityId: args.roomId,
+      operation: "UPDATE",
+      timestamp: new Date(),
+      stageContext: Stage.S7,
+      inquiryId: args.inquiryId,
+      entryId: args.entryId,
+      payload: { roomId: args.roomId, roomNumber: args.roomNumber, ...args.payload } as Prisma.InputJsonValue,
+      createdBy: args.actorId,
+    },
+  });
+}
+
+/** Housekeeping is told the room needs turning over — best-effort, after the release commits. */
+export async function scheduleCleaningAfterLeaving(prisma: PrismaClient, args: { entryId: string; roomId: string; actorId: string }): Promise<void> {
+  try {
+    const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as never, "housekeeping.sla.windowMinutes"));
+    const dueAt = new Date(Date.now() + (Number.isFinite(windowMinutes) && windowMinutes > 0 ? windowMinutes : 60) * 60_000);
+    const engine = await getTimerEngine();
+    const timerRecordId = randomUUID();
+    const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId: args.entryId, roomId: args.roomId, timerRecordId }, { startAfter: dueAt });
+    await prisma.timerRecord.create({
+      data: {
+        id: timerRecordId,
+        entryId: args.entryId,
+        entityType: "Room",
+        entityId: args.roomId,
+        timerType: "HOUSEKEEPING_SLA_W24",
+        timerCode: "HOUSEKEEPING_SLA_W24",
+        dueAt,
+        firesAt: dueAt,
+        status: "SCHEDULED",
+        pgBossJobId,
+        createdBy: args.actorId,
+        payload: { roomId: args.roomId, entryId: args.entryId, timerRecordId },
+      },
+    });
+  } catch {
+    // swallowed on purpose: the room is durably DEPARTED_DIRTY, which is the fact that matters
+  }
+}
+
 const ALREADY_DEPARTED = new Set<string>([InventoryClaimState.DEPARTED_DIRTY, InventoryClaimState.DEPARTED_CLEAN]);
 
 /**
@@ -159,9 +246,6 @@ export async function departRoomEarly(
     forgoneTot = round2(tot.minus(newFrozenTotal));
   }
 
-  const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as never, "housekeeping.sla.windowMinutes"));
-  const dueAt = new Date(Date.now() + (Number.isFinite(windowMinutes) && windowMinutes > 0 ? windowMinutes : 60) * 60_000);
-
   await prisma.$transaction(async (tx) => {
     // End-date the row so the night audit posts nothing for nights nobody sleeps. Per-row
     // update only — the db.ts guard forbids `roomAssignment.updateMany`.
@@ -176,85 +260,34 @@ export async function departRoomEarly(
       });
     }
 
-    await tx.room.update({ where: { id: room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
-    await markRoomDirtyOnDepartureTx(tx, room.id);
-    await tx.roomClaimStateEvent.create({
-      data: {
-        roomId: room.id,
-        entryId: entry.id,
-        fromState: InventoryClaimState.OCCUPIED,
-        toState: InventoryClaimState.DEPARTED_DIRTY,
-        actorId: input.actorId,
-        reason: input.reason?.trim() || "Guest of this room left; the rest of the booking stays",
-      },
-    });
-    await resetRoomBedToUsualTx(tx, {
+    await releaseRoomFromStayTx(tx, {
       roomId: room.id,
+      roomNumber: room.roomNumber,
       entryId: entry.id,
+      inquiryId: entry.inquiryId,
       actorId: input.actorId,
-      reason: "Guest of this room left",
-      leaving: true,
-    });
-
-    await tx.traceEvent.create({
-      data: {
-        eventType: "ROOM.RELEASED_MID_STAY",
-        actorId: input.actorId,
-        actorLevel: input.actorLevel,
-        entityType: "Room",
-        entityId: room.id,
-        operation: "UPDATE",
-        timestamp: new Date(),
-        stageContext: Stage.S7,
-        inquiryId: entry.inquiryId,
-        entryId: entry.id,
-        payload: {
-          roomId: room.id,
-          roomNumber: room.roomNumber,
-          assignmentId: live.id,
-          departureDate: ymdUtc(departure),
-          rowStart: ymdUtc(rowStart),
-          rowEndBefore: ymdUtc(rowEnd),
-          totalNights,
-          sleptNights,
-          unstayedNights,
-          forgoneSubtotal: forgoneSub.toFixed(2),
-          forgoneTotal: forgoneTot.toFixed(2),
-          frozenSubtotalBefore: live.frozenSubtotal?.toString() ?? null,
-          frozenSubtotalAfter: newFrozenSubtotal?.toString() ?? live.frozenSubtotal?.toString() ?? null,
-          reason: input.reason?.trim() ?? null,
-          requiredLevel: needed,
-        },
-        createdBy: input.actorId,
+      actorLevel: input.actorLevel,
+      reason: input.reason?.trim() || "Guest of this room left; the rest of the booking stays",
+      payload: {
+        assignmentId: live.id,
+        departureDate: ymdUtc(departure),
+        rowStart: ymdUtc(rowStart),
+        rowEndBefore: ymdUtc(rowEnd),
+        totalNights,
+        sleptNights,
+        unstayedNights,
+        forgoneSubtotal: forgoneSub.toFixed(2),
+        forgoneTotal: forgoneTot.toFixed(2),
+        frozenSubtotalBefore: live.frozenSubtotal?.toString() ?? null,
+        frozenSubtotalAfter: newFrozenSubtotal?.toString() ?? live.frozenSubtotal?.toString() ?? null,
+        reason: input.reason?.trim() ?? null,
+        requiredLevel: needed,
       },
     });
   });
 
-  // Post-commit, best-effort: housekeeping has to know the room needs turning over. A failure
-  // here leaves the room durably DEPARTED_DIRTY, which is the fact that matters.
-  try {
-    const engine = await getTimerEngine();
-    const timerRecordId = randomUUID();
-    const pgBossJobId = await engine.schedule("HOUSEKEEPING_SLA_W24", { entryId: entry.id, roomId: room.id, timerRecordId }, { startAfter: dueAt });
-    await prisma.timerRecord.create({
-      data: {
-        id: timerRecordId,
-        entryId: entry.id,
-        entityType: "Room",
-        entityId: room.id,
-        timerType: "HOUSEKEEPING_SLA_W24",
-        timerCode: "HOUSEKEEPING_SLA_W24",
-        dueAt,
-        firesAt: dueAt,
-        status: "SCHEDULED",
-        pgBossJobId,
-        createdBy: input.actorId,
-        payload: { roomId: room.id, entryId: entry.id, timerRecordId },
-      },
-    });
-  } catch {
-    // swallowed on purpose — see above
-  }
+  // Post-commit, best-effort: housekeeping has to know the room needs turning over.
+  await scheduleCleaningAfterLeaving(prisma, { entryId: entry.id, roomId: room.id, actorId: input.actorId });
 
   // The room no longer sleeps the guest tonight — its line, if posted ahead, goes to zero (2026-10-29).
   {

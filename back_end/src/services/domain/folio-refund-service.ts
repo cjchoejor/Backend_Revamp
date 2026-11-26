@@ -5,6 +5,7 @@ import { NotFoundError, StateTransitionError, ValidationError } from "../../lib/
 import { allocateReadableId } from "../../lib/readable-id.js";
 import { recomputeFolioOutstandingBalance } from "../../lib/folio-outstanding-from-payment.js";
 import { toDecimal } from "../../lib/money.js";
+import { computeNetForBillingModel } from "../../lib/folio-outstanding-per-billing-model.js";
 
 /**
  * What a folio has been paid ABOVE its bill (2026-09-18): the money the hotel holds for the guest.
@@ -38,7 +39,16 @@ export async function recordFolioRefund(
   prisma: PrismaClient,
   folioId: string,
   actor: { actorId: string; actorLevel: string },
-  input: { amount: number; paymentMethod: string; reference?: string | null; reason: string; bankName?: string | null; journalNumber?: string | null },
+  input: {
+    amount: number;
+    paymentMethod: string;
+    reference?: string | null;
+    reason: string;
+    bankName?: string | null;
+    journalNumber?: string | null;
+    /** Whose share the money goes back from (2026-11-26): the guest's, or the agency's or company's. */
+    billingModel?: string | null;
+  },
 ) {
   const folio = await prisma.folio.findUnique({
     where: { id: folioId },
@@ -51,13 +61,27 @@ export async function recordFolioRefund(
   if (!input.reason?.trim()) throw new ValidationError("Say why the money goes back");
   const amount = toDecimal(input.amount);
   if (!amount.gt(0)) throw new ValidationError("A refund is a positive amount");
-  const overpaid = await computeFolioOverpaid(prisma, folioId);
-  if (amount.gt(overpaid)) {
+  // From one payer's share (2026-11-26): never more than that payer paid above their own share, so
+  // a refund to the guest cannot hand back the agency's money, or the other way round — and the
+  // guest's money is not kept to pay what the agency still owes. Without a share: the bill as a whole.
+  const share = input.billingModel?.trim() || null;
+  const overpaid = share ? null : await computeFolioOverpaid(prisma, folioId);
+  if (overpaid && amount.gt(overpaid)) {
     throw new ValidationError(
       overpaid.gt(0)
         ? `That is more than the ${overpaid.toFixed(2)} paid above the bill — refund at most ${overpaid.toFixed(2)}`
         : "Nothing has been paid above the bill — there is nothing to refund",
     );
+  }
+  if (share) {
+    const shareOver = (await computeNetForBillingModel(prisma, folioId, share)).neg();
+    if (amount.gt(shareOver)) {
+      throw new ValidationError(
+        shareOver.gt(0)
+          ? `That is more than the ${shareOver.toFixed(2)} paid above this payer's share — refund at most ${shareOver.toFixed(2)}`
+          : "This payer has not paid above their share — there is nothing to refund to them",
+      );
+    }
   }
   const bank = await cleanPaymentBank(prisma, { method: input.paymentMethod, bankName: input.bankName, journalNumber: input.journalNumber }, "refund");
   const now = new Date();
@@ -73,6 +97,7 @@ export async function recordFolioRefund(
         paymentMethod: input.paymentMethod.trim(),
         bankName: bank.bankName,
         journalNumber: bank.journalNumber,
+        billingModel: share,
         receivedAt: now,
         recordedBy: actor.actorId,
         stage: folio.entry!.currentStage,
@@ -96,8 +121,9 @@ export async function recordFolioRefund(
           folioId,
           paymentId: created.id,
           amount: amount.toFixed(2),
-          overpaidBefore: overpaid.toFixed(2),
+          overpaidBefore: overpaid ? overpaid.toFixed(2) : null,
           paymentMethod: input.paymentMethod,
+          billingModel: share,
           reason: input.reason.trim(),
           reference: input.reference?.trim() || null,
         },

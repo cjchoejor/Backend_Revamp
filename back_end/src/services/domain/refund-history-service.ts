@@ -18,7 +18,7 @@ import { AppError } from "../../lib/errors.js";
 import { toDecimal } from "../../lib/money.js";
 
 /** Why the money went back, as one kind. */
-export type RefundKind = "CANCELLED" | "NO_SHOW" | "PAID_OVER" | "REQUEST" | "OTHER";
+export type RefundKind = "CANCELLED" | "NO_SHOW" | "PAID_OVER" | "VOUCHER_REDUCED" | "REQUEST" | "OTHER";
 
 const REQUEST_CAUSE_WORDS: Record<string, string> = {
   RENEGOTIATED: "An advance paid at an earlier price",
@@ -143,6 +143,18 @@ export async function listRefundsMade(prisma: PrismaClient, opts: { entryId?: st
     }
     if (notes.startsWith("NO_SHOW_REFUND")) {
       return { kind: "NO_SHOW" as RefundKind, why: "No-show: what was paid beyond the charge", reason: null, reference: null, bank: null, requestId: null };
+    }
+    // A charge on the agency's share corrected after settlement, before the agency paid (2026-11-26):
+    // nothing was handed over — the agency's voucher covers less.
+    if (notes.startsWith("VOUCHER_REDUCED:")) {
+      return {
+        kind: "VOUCHER_REDUCED" as RefundKind,
+        why: "The agency's voucher reduced — it owes this much less",
+        reason: notes.slice("VOUCHER_REDUCED:".length) || null,
+        reference: null,
+        bank: null,
+        requestId: null,
+      };
     }
     if (notes.startsWith("REFUND:")) {
       const t = paidOverOf.get(r.id);

@@ -16,6 +16,7 @@
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { StayDates } from "@/components/ds/stay-dates";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip } from "@/design-system";
@@ -37,6 +38,7 @@ import {
 import { openCancellationConfirmationPdf, openFolioDocumentPdf, openInvoicePdf } from "@/lib/api/documents";
 import { FolioSendDialog } from "@/components/ds/workspace/folio-papers";
 import { activeQuotation, deriveFinancials, effectiveCheckOutIso } from "@/lib/desk/workspace";
+import { isZeroNightRow, roomsInUseFor } from "@/lib/desk/party-rooms";
 import { fmtDateTime, fmtDay, fmtInstantDate, fmtStamp, instantYmd, money, nightsOf, plural } from "@/lib/ds/format";
 import { rateWords } from "@/lib/ds/rates";
 import { FolioLinesTable, spaceNamesFromAllocations } from "@/components/desk/workspace/folio-lines";
@@ -44,6 +46,8 @@ import { SplitSettlementBlock } from "@/components/desk/workspace/split-settleme
 import type { EntryDetail, InvoiceSummary } from "@/types/api";
 import { sentWords, useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
+import { CorrectionDialog } from "./s7-folio";
+import { ChargeCorrectionAsks } from "./charge-correction-asks";
 import {
   ActTiles,
   AnswerLine,
@@ -126,7 +130,7 @@ function invoiceLabel(inv: InvoiceSummary) {
  * tail is open: a cancelled or expired booking is a record and has none.
  */
 export const S9_PANES: StepPane[] = [
-  { key: "late", label: "Late charge", cards: [] },
+  { key: "late", label: "Charges", cards: [] },
   { key: "invoice", label: "Tax invoice", cards: [] },
 ];
 
@@ -151,6 +155,8 @@ export function S9Closed({
   const open = !readOnly && entry.status !== "CLOSED" && entry.currentStage === "S9";
   return (
     <StepCanvas past={readOnly}>
+      {/* The desk's ask to correct a charge, waiting, and the FOM's last answer — first (2026-11-26). */}
+      {tail ? <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={entry.status === "ACTIVE"} /> : null}
       <div className="pane" hidden={at(null)}>
         <DisputesCard entry={entry} tz={clock.tz} />
         <WhatTheStayWas entry={entry} />
@@ -186,9 +192,18 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
   const co = effectiveCheckOutIso(entry);
   const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? null;
   const nights = nightsOf(ci, co);
-  const roomNumbers = Array.from(new Set((entry.roomAssignments ?? []).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort((a, b) =>
-    a.localeCompare(b, undefined, { numeric: true }),
-  );
+  // The rooms the guest left at check-out; the rooms slept in before a move are said under them
+  // (2026-11-26, lib/desk/party-rooms.ts `roomsInUseFor`) — never a room never slept in.
+  const byNo = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true });
+  const roomNumbers = Array.from(new Set(roomsInUseFor(entry, null).map((a) => a.room?.roomNumber).filter((x): x is string => !!x))).sort(byNo);
+  const movedFrom = Array.from(
+    new Set(
+      (entry.roomAssignments ?? [])
+        .filter((a) => !isZeroNightRow(a))
+        .map((a) => a.room?.roomNumber)
+        .filter((x): x is string => !!x && !roomNumbers.includes(x)),
+    ),
+  ).sort(byNo);
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
   const stayTotal = billing.data?.stayTotal ?? null;
   const passes = entry.segmentNumber ?? 1;
@@ -224,7 +239,10 @@ function WhatTheStayWas({ entry }: { entry: EntryDetail }) {
           <div>
             <b>{roomNumbers.length ? roomNumbers.join(", ") : entry.numberOfRooms ?? "—"}</b>
           </div>
-          <div className="meta">{entry.guestCount != null ? plural(entry.guestCount, "guest") : "—"}</div>
+          <div className="meta">
+            {entry.guestCount != null ? plural(entry.guestCount, "guest") : "—"}
+            {movedFrom.length ? ` · moved from ${movedFrom.join(", ")} during the stay` : ""}
+          </div>
         </div>
         <div>
           <div className="meta">Booked by</div>
@@ -423,10 +441,11 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
             },
             {
               key: "late",
-              label: "Late charge",
-              sub: "a charge found after the guest left",
-              onClick: openPane && fom && !noShow ? () => openPane("late") : undefined,
-              reason: noShow ? "a no-show never stayed" : !fom ? "needs the FOM" : undefined,
+              label: "Charges",
+              sub: "a late charge, or a wrong one put right",
+              // Open to the front desk too (2026-11-26): it asks the FOM to correct a charge there.
+              onClick: openPane && !noShow ? () => openPane("late") : undefined,
+              reason: noShow ? "a no-show never stayed" : undefined,
             },
             {
               key: "invoice",
@@ -479,7 +498,7 @@ function AfterTheStay({ entry, tz, openPane }: { entry: EntryDetail; tz: string;
                   <span className="money">{money(p.amount, p.currency)}</span>
                   <span className="meta">
                     {" "}
-                    · {p.paymentDirection === "OUT" ? "refunded · " : ""}
+                    · {p.paymentDirection === "OUT" ? (p.paymentMethod === "VOUCHER" ? "the agency's voucher reduced · " : "refunded · ") : ""}
                     {p.receivedAt ? `${fmtInstantDate(p.receivedAt, tz)} · ` : ""}
                     {p.id}
                   </span>
@@ -671,6 +690,7 @@ function AfterStayHandoff({ entry, tz }: { entry: EntryDetail; live: boolean; tz
 function LateChargePane({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
+  const corr = useMayApprove("CHARGE_CORRECTION", fom);
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -678,11 +698,22 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
   // A button under the bill, the form in a pop-up (2026-10-30, operator: "post charge here to be a
   // button as well") — as Stay's and Check-out's Post a charge.
   const [posting, setPosting] = useState(false);
+  const [correcting, setCorrecting] = useState(false);
   const why = noShow
     ? "A no-show never stayed — its bill closed with the no-show charge, so nothing more can be added."
     : !fom
       ? "Adding a charge after the guest has left is the FOM's."
       : null;
+  // A wrong charge put right after the bill is settled (2026-11-26): the FOM's, until the record is sealed.
+  const sealed = entry.status !== "ACTIVE";
+  const writtenOff = entry.folio?.state === "WRITTEN_OFF";
+  const whyNotCorrect = noShow
+    ? "A no-show's bill closed with the no-show charge."
+    : sealed
+      ? "The record is sealed — its bill is read-only."
+      : writtenOff
+        ? "This bill was written off."
+        : null;
   return (
     <>
       <StepCard
@@ -698,10 +729,15 @@ function LateChargePane({ entry }: { entry: EntryDetail }) {
             <Button className={why ? undefined : "go"} icon="pen" state={why ? "inert" : "default"} reason={why ?? undefined} onClick={() => setPosting(true)}>
               Post a charge
             </Button>
+            {/* The FOM's; the front desk asks the FOM, who answers from the bell (2026-11-26). */}
+            <Button kind="secondary" state={whyNotCorrect ? "inert" : "default"} reason={whyNotCorrect ?? undefined} onClick={() => setCorrecting(true)}>
+              {corr.may ? "Correct a charge" : "Ask the FOM to correct a charge"}
+            </Button>
           </div>
         </Live>
       </StepCard>
       {why ? null : <LateCharge entry={entry} open={posting} onClose={() => setPosting(false)} />}
+      {whyNotCorrect ? null : <CorrectionDialog entry={entry} open={correcting} onClose={() => setCorrecting(false)} ask={!corr.may} />}
     </>
   );
 }
@@ -715,18 +751,24 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
   const [sendTo, setSendTo] = useSendTo(entry);
   const [paper, setPaper] = useState<PaperRef | null>(null);
   const { invoices, finals, lastSent, lateSinceInvoice } = useInvoiceFacts(entry, tz);
-  const others = invoices.filter((i) => i.invoiceType !== "FINAL");
+  // Earlier bills: the proforma and interim bills, and a tax invoice replaced by a newer one (2026-11-26).
+  const others = invoices.filter((i) => i.invoiceType !== "FINAL" || i.state === "SUPERSEDED");
   // Issue and send sits beside the paper's own Preview and PDF, and asks in a pop-up (2026-10-30,
   // operator: "the issue and send button is way below, keep it next to the preview and pdf").
   const index = useFolioIndex(entry);
   const draft = index.data?.documents.find((x) => x.kind === "tax-invoice") ?? null;
   const [issuing, setIssuing] = useState(false);
   const covered = !!lastSent && !lateSinceInvoice;
+  // One issued and not sent yet (a replacement after a correction, 2026-11-26): sending it is next.
+  const waitingToSend = finals.some((i) => !i.dispatchedAt);
   const row = (inv: InvoiceSummary) => (
     <div key={inv.id} className="row-acts sm">
       <span className={inv.state === "SUPERSEDED" ? "meta" : undefined}>
         <b>{invoiceLabel(inv)}</b> · {INVOICE_TYPE_WORD[inv.invoiceType] ?? words(inv.invoiceType)}
         {inv.state === "DRAFT" && !inv.dispatchedAt ? <> <NotSentChip made={inv.invoiceType === "FINAL" ? "issued" : "generated"} /></> : ` · ${INVOICE_STATE_WORD[inv.state] ?? words(inv.state)}`}
+        {/* A tax invoice replaced after a charge was corrected or found late (2026-11-26). */}
+        {inv.state === "SUPERSEDED" && inv.supersededById ? <span className="meta"> · replaced by {inv.supersededById}</span> : null}
+        {typeof inv.metadata?.replaces === "string" ? <span className="meta"> · replaces {inv.metadata.replaces}</span> : null}
         {inv.dispatchedAt ? (
           <span className="meta">
             {" "}
@@ -757,7 +799,7 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
           out is history (2026-09-18). */}
       {inv.state === "DRAFT" && inv.invoiceType === "FINAL" ? (
         <Live>
-          <Button compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: inv.id, to: sendTo })}>
+          <Button className="go" compact icon="send" state={send.isPending ? "working" : "default"} workingLabel="Sending…" onClick={() => send.mutate({ invoiceId: inv.id, to: sendTo })}>
             Send it
           </Button>
         </Live>
@@ -823,7 +865,7 @@ function TaxInvoicePane({ entry, tz }: { entry: EntryDetail; tz: string }) {
         {finals.length ? (
           <Live>
             <div className="row-acts" style={{ marginTop: 6 }}>
-              <Button className={covered ? undefined : "go"} kind={covered ? "secondary" : undefined} compact icon="send" onClick={() => setIssuing(true)}>
+              <Button className={covered || waitingToSend ? undefined : "go"} kind={covered || waitingToSend ? "secondary" : undefined} compact icon="send" onClick={() => setIssuing(true)}>
                 Issue and send a new one
               </Button>
             </div>

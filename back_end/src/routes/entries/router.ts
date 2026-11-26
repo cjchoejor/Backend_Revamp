@@ -1,3 +1,4 @@
+import { enforceMayApprove } from "../../lib/approval-roles.js";
 import { s3ReEntryRequestSchema } from "../../dtos/06-reservations/request-schemas.js";
 import { Router } from "express";
 import { prisma } from "../../db.js";
@@ -19,6 +20,10 @@ import {
   previewDamageChargeRequestSchema,
   setExpectedArrivalRequestSchema,
   checkInPaymentDeferralRequestSchema,
+  leaveOwingAskRequestSchema,
+  chargeCorrectionAskRequestSchema,
+  chargeCorrectionDecideRequestSchema,
+  leaveOwingDecideRequestSchema,
   checkInPaymentDecisionRequestSchema,
   checkInPaymentWithdrawRequestSchema,
   decideNegotiationAmendmentRequestSchema,
@@ -65,13 +70,16 @@ import { callerRequestSchema } from "../../dtos/02-inquiries/request-schemas.js"
 import { runPostCheckoutInspectionWorker } from "../../workers/w9-post-checkout-inspection-worker.js";
 import { describeBookingInspections, roomListWords } from "../../lib/room-inspection-standing.js";
 import { getEntryTrace } from "../../services/infrastructure/trace-query-service.js";
+import { buildHistoryFacts } from "../../services/domain/history-facts-service.js";
 import { buildBookingJourneySummary } from "../../services/domain/booking-journey-summary-service.js";
 import { buildEntryBillingSummary } from "../../services/domain/entry-billing-summary-service.js";
 import { buildSegmentHistory } from "../../services/domain/segment-history-service.js";
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
-import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/domain/early-departure-service.js";
+import { previewEarlyDeparture } from "../../services/domain/early-departure-service.js";
+import { listRoomDepartures, recordLeavingEarly, releaseScheduledRoomDeparture } from "../../services/domain/rooms-leaving-early-service.js";
+import { addRoomsToStay, discardPendingGuestRows, previewAddRoom } from "../../services/domain/add-room-to-stay-service.js";
 import { buildQuotationPreview, buildTripQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
@@ -86,6 +94,12 @@ import {
   stayExtensionNowRequestSchema,
   earlyDeparturePreviewRequestSchema,
   earlyDepartureRequestSchema,
+  roomRemovalAskRequestSchema,
+  roomRemovalDecideRequestSchema,
+  roomDepartureReleaseRequestSchema,
+  addRoomPreviewRequestSchema,
+  addRoomRequestSchema,
+  addRoomDiscardGuestsRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
 import {
   commitStayExtension,
@@ -443,23 +457,126 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
 entriesRouter.post("/:id/early-departure/preview", requireActorLevel("L1"), validateBody(earlyDeparturePreviewRequestSchema), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await previewEarlyDeparture(prisma, req.params.id, { departureDate: req.body.departureDate ?? null }));
+    res.json(await previewEarlyDeparture(prisma, req.params.id, { departureDate: req.body.departureDate ?? null, roomIds: req.body.roomIds ?? null }));
   } catch (e) {
     next(e);
   }
 });
 
-entriesRouter.post("/:id/early-departure", requireActorLevel("L3"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/early-departure", requireActorLevel("L1"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    // The whole booking, or some rooms (2026-11-26) — whichever the rooms named come to.
     res.json(
-      await recordEarlyDeparture(prisma, actor, req.params.id, {
+      await recordLeavingEarly(prisma, actor, req.params.id, {
         departureDate: req.body.departureDate ?? null,
+        roomIds: req.body.roomIds ?? null,
+        billing: req.body.billing ?? null,
         reason: req.body.reason,
         waiveFee: req.body.waiveFee === true,
         waiveReason: req.body.waiveReason ?? null,
+        kind: req.body.kind ?? "LEAVING",
       }),
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Removing a room booked by mistake (2026-11-26): the asks on the booking (L1), the desk's ask (L1),
+ * the decision (whoever the admin console lets — approving IS removing), the desk taking it back (L1).
+ */
+entriesRouter.get("/:id/room-removals", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readRoomRemovals } = await import("../../services/domain/room-removal-request-service.js");
+    res.json(await readRoomRemovals(prisma, req.params.id, req.actor!.level));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals", requireActorLevel("L1"), validateBody(roomRemovalAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askToRemoveRoom } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.status(201).json(await askToRemoveRoom(prisma, actor, req.params.id, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals/:requestId/decide", requireActorLevel("L1"), validateBody(roomRemovalDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideRoomRemoval } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await decideRoomRemoval(prisma, actor, req.params.id, req.params.requestId, req.body));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/room-removals/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawRoomRemoval } = await import("../../services/domain/room-removal-request-service.js");
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await withdrawRoomRemoval(prisma, actor, req.params.id, req.params.requestId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Rooms recorded to leave early while the rest stay (2026-11-26). */
+entriesRouter.get("/:id/room-departures", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ items: await listRoomDepartures(prisma, req.params.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Rooms added to the booking on its check-in day (2026-11-26): the house over the stay, the party, who may. */
+entriesRouter.post("/:id/add-room/preview", requireActorLevel("L1"), validateBody(addRoomPreviewRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await previewAddRoom(prisma, req.params.id, req.actor!.level));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The rooms join the booking for the whole stay, priced on the desk's table — whoever the admin console lets. */
+entriesRouter.post("/:id/add-room", requireActorLevel("L1"), validateBody(addRoomRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await addRoomsToStay(prisma, actor, req.params.id, {
+        roomIds: req.body.roomIds,
+        adults: req.body.adults,
+        childAges: req.body.childAges ?? [],
+        roomCompositions: req.body.roomCompositions,
+        reason: req.body.reason ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** The new guests' rows written while adding a room, taken back when the desk leaves it (L1). */
+entriesRouter.post("/:id/add-room/discard-guests", requireActorLevel("L1"), validateBody(addRoomDiscardGuestsRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await discardPendingGuestRows(prisma, actor, req.params.id, req.body.subjectKeys));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** A room recorded to leave on a later day, released on its day — the desk's act. */
+entriesRouter.post("/:id/room-departures/:recordId/release", requireActorLevel("L1"), validateBody(roomDepartureReleaseRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await releaseScheduledRoomDeparture(prisma, actor, req.params.id, req.params.recordId, { keyReturned: req.body.keyReturned === true }));
   } catch (e) {
     next(e);
   }
@@ -706,6 +823,13 @@ entriesRouter.get("/:id/trace", requireActorLevel("L1"), async (req, res, next) 
   try {
     const limit = typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
     const result = await getEntryTrace(prisma, req.params.id, limit);
+    // History asks for each act's facts in words, and the acts that leave no record of their own
+    // (a charge posted, who pays set) — 2026-11-26, services/domain/history-facts-service.ts.
+    if (req.query.facts === "1") {
+      const { facts, extra, stages } = await buildHistoryFacts(prisma, req.params.id, result.items);
+      res.json({ ...result, facts, extra, stages });
+      return;
+    }
     res.json(result);
   } catch (e) {
     next(e);
@@ -1146,10 +1270,12 @@ entriesRouter.post("/:id/change-stay", requireActorLevel("L2"), validateBody(cha
  */
 entriesRouter.post(
   "/:id/negotiation-amendment-requests/:requestId/decide",
-  requireActorLevel("L2"),
+  requireActorLevel("L1"),
   validateBody(decideNegotiationAmendmentRequestSchema),
   async (req, res, next) => {
     try {
+      // Who decides is the admin console's (2026-11-26, approvals.negotiationChange.roles).
+      await enforceMayApprove(prisma, "NEGOTIATION_CHANGE", req.actor!.level);
       const result = await decideNegotiationAmendmentRequest(
         prisma,
         req.params.id,
@@ -1403,6 +1529,100 @@ entriesRouter.get("/:id/checkin-payment", requireActorLevel("L1"), async (req, r
   }
 });
 
+/**
+ * A charge on a settled bill corrected at the desk's ask (2026-11-26): where the asks stand (L1,
+ * no-store), the desk's ask (L1), the FOM's decision (L2 — approving posts the correction), the desk
+ * taking it back (L1).
+ */
+entriesRouter.get("/:id/charge-corrections", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readChargeCorrections } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(await readChargeCorrections(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections", requireActorLevel("L1"), validateBody(chargeCorrectionAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.status(201).json(
+      await askChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, ...req.body }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections/:requestId/decide", requireActorLevel("L1"), validateBody(chargeCorrectionDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(
+      await decideChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
+        entryId: req.params.id,
+        requestId: req.params.requestId,
+        decision: req.body.decision,
+        note: req.body.note ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/charge-corrections/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawChargeCorrection } = await import("../../services/domain/charge-correction-request-service.js");
+    res.json(await withdrawChargeCorrection(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, requestId: req.params.requestId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/**
+ * Leaving owing at Check-out (2026-11-26): where it stands (L1, no-store), the desk's ask (L1), the
+ * FOM's decision (L2 — approving records the FOM's credit extension), the desk taking it back (L1).
+ */
+entriesRouter.get("/:id/leave-owing", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { readLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(await readLeaveOwing(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing", requireActorLevel("L1"), validateBody(leaveOwingAskRequestSchema), async (req, res, next) => {
+  try {
+    const { askToLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.status(201).json(await askToLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, guestWords: req.body.guestWords }));
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing/:requestId/decide", requireActorLevel("L1"), validateBody(leaveOwingDecideRequestSchema), async (req, res, next) => {
+  try {
+    const { decideLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(
+      await decideLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
+        entryId: req.params.id,
+        requestId: req.params.requestId,
+        decision: req.body.decision,
+        note: req.body.note ?? null,
+        payWithinDays: req.body.payWithinDays ?? null,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+entriesRouter.post("/:id/leave-owing/:requestId/withdraw", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const { withdrawLeaveOwing } = await import("../../services/domain/leave-owing-service.js");
+    res.json(await withdrawLeaveOwing(prisma, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, { entryId: req.params.id, requestId: req.params.requestId }));
+  } catch (e) {
+    next(e);
+  }
+});
+
 /** The desk asks the FOM to let the guest pay the rest later (L1). */
 entriesRouter.post("/:id/checkin-payment/deferral", requireActorLevel("L1"), validateBody(checkInPaymentDeferralRequestSchema), async (req, res, next) => {
   try {
@@ -1415,7 +1635,7 @@ entriesRouter.post("/:id/checkin-payment/deferral", requireActorLevel("L1"), val
 });
 
 /** The FOM decides — let them pay later, or turn it down (L2+). */
-entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L2"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
+entriesRouter.post("/:id/checkin-payment/decide", requireActorLevel("L1"), validateBody(checkInPaymentDecisionRequestSchema), async (req, res, next) => {
   try {
     const { decideCheckInPaymentDeferral } = await import("../../services/domain/checkin-payment-service.js");
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };

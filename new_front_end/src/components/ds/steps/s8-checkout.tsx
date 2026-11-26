@@ -16,6 +16,7 @@
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
 import { payerChoiceWord, payerPartyOf } from "@/lib/ds/payer-words";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useMayApprove } from "@/hooks/use-approvals";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button, Chip, Icon, Refusal } from "@/design-system";
@@ -47,6 +48,8 @@ import type { EntryDetail } from "@/types/api";
 import { sentWords } from "@/hooks/use-invoice-recipient";
 import { OverpaidCard } from "./refund-card";
 import { TaxInvoiceSendDialog, type TaxInvoiceTarget } from "./tax-invoice-send";
+import { AskFomToLeaveOwing, LeaveOwingStatus, useLeaveOwing } from "./s8-leave-owing";
+import { ChargeCorrectionAsks } from "./charge-correction-asks";
 import {
   AnswerLine,
   ChangeBookingMenu,
@@ -55,6 +58,7 @@ import {
   Facts,
   Live,
   PaperDrawer,
+  Choice,
   ReasonDialog,
   SeeRow,
   StageActs,
@@ -190,17 +194,24 @@ export function S8CheckOut({
   );
 
   const chargeable = live && folio?.state === "LIVE";
+  // A share settled (the agency's voucher) leaves the guest's share to pay — a wrong charge on it is
+  // still put right here, by the FOM (2026-11-26, operator: "we need it in stage 8 itself, or else
+  // the guest can't check out without paying the wrong charge").
+  const correctable = live && isSettled(folio?.state);
   // A pane is hidden, never unmounted — see S8_PANES.
   const at = (k: string | null) => ((pane ?? null) === k ? undefined : true);
 
   return (
     <StepCanvas past={past}>
+      {/* The desk's ask to correct a charge, waiting, and the FOM's last answer — first, on either view
+          (2026-11-26). The FOM answers in Waiting for your answer at the top of the booking. */}
+      {past ? null : <ChargeCorrectionAsks entry={entry} tz={clock.tz} live={live} />}
       <div className="pane" hidden={at(null)}>
         {past ? null : <CheckoutAttention entry={entry} onDisputes={() => setDisputesOpen(true)} />}
         <Departure entry={entry} live={live} />
         {/* A damage found is answered before the bill is settled (2026-10-26). */}
         <DamageCard entry={entry} live={live} />
-        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable ? () => stepPane.open("charges") : undefined} />
+        <MasterBill entry={entry} tz={clock.tz} onTab={setChargeTarget} onAddCharge={chargeable || correctable ? () => stepPane.open("charges") : undefined} />
         <HowSettled entry={entry} live={live} tz={clock.tz} onBackToStay={() => openWay("stay")} goToStep={goToStep} />
         <OverpaidCard entry={entry} live={live} />
         <Invoices entry={entry} live={live} tz={clock.tz} />
@@ -226,7 +237,7 @@ export function S8CheckOut({
       </WorkPopup>
 
       <div className="pane" hidden={at("charges")}>
-        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} target={chargeTarget} setTarget={setChargeTarget} />
+        <FolioTableCard entry={entry} onTab={setChargeTarget} chargeable={chargeable} correctable={correctable} target={chargeTarget} setTarget={setChargeTarget} />
       </div>
 
       {past ? null : (
@@ -306,7 +317,9 @@ function CheckoutActs({
   const chargeWhy = !folio
     ? "There is no bill on this booking"
     : settled
-      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge"
+      ? live
+        ? undefined
+        : "Only while the booking is at Check-out"
       : folio.state !== "LIVE"
         ? "The bill is not open"
         : !live
@@ -315,8 +328,10 @@ function CheckoutActs({
   const charges: ChangeBookingItem[] = [
     {
       key: "charge",
-      label: "Add or correct a charge",
-      note: "The bill's lines, and a charge found this morning — posted while the bill is open.",
+      label: settled ? "Correct a charge" : "Add or correct a charge",
+      note: settled
+        ? "A share is settled: a wrong charge is put right here by the FOM, or the desk asks the FOM. A new charge goes on the Closed step, under Charges."
+        : "The bill's lines, and a charge found this morning — posted while the bill is open.",
       onSelect: chargeWhy ? undefined : onCharges,
       reason: chargeWhy,
     },
@@ -333,7 +348,7 @@ function CheckoutActs({
   const backWhy = !live
     ? "Only while the booking is at Check-out"
     : settled
-      ? "The bill is settled — a charge found now is posted on the Closed step"
+      ? "A share is settled — a wrong charge is corrected from Charges; a new one goes on the Closed step"
       : !fom
         ? "The FOM's call"
         : undefined;
@@ -598,6 +613,7 @@ function FolioTableCard({
   entry,
   onTab,
   chargeable,
+  correctable = false,
   target,
   setTarget,
 }: {
@@ -605,11 +621,15 @@ function FolioTableCard({
   onTab: (target: string) => void;
   /** The bill is open at Check-out — a charge can still go on it. */
   chargeable: boolean;
+  /** A share is settled at Check-out — a wrong charge is still corrected, by the FOM (2026-11-26). */
+  correctable?: boolean;
   target: string;
   setTarget: (v: string) => void;
 }) {
   const { session } = useSession();
   const fom = atLeast(session?.actorLevel, "L2");
+  // Correcting a settled bill: whoever the admin console lets (2026-11-26).
+  const corr = useMayApprove("CHARGE_CORRECTION", fom);
   const billing = useBilling(entry);
   const fo = billing.data?.folio ?? null;
   const cur = billing.data?.currency ?? entry.folio?.lines?.[0]?.currency ?? "BTN";
@@ -618,7 +638,7 @@ function FolioTableCard({
   const shut = !folio
     ? "There is no bill on this booking."
     : isSettled(folio.state)
-      ? "The bill is settled — a charge found now is posted on the Closed step, as a late charge."
+      ? "A share of the bill is settled — a wrong charge is still corrected here: by the FOM, or the desk asks the FOM. A new charge goes on the Closed step, under Charges."
       : folio.state !== "LIVE"
         ? `The bill is ${FOLIO_STATE_WORD[folio.state] ?? words(folio.state)} — charges can be added only while it is open.`
         : null;
@@ -638,9 +658,23 @@ function FolioTableCard({
             <Button className={chargeable ? "go" : undefined} icon="pen" state={chargeable ? "default" : "inert"} reason={shut ?? undefined} onClick={() => setOpen("post")}>
               Post a charge
             </Button>
-            <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
-              Correct a charge
-            </Button>
+            {correctable ? (
+              corr.may ? (
+                <Button className="go" onClick={() => setOpen("correct")}>
+                  Correct a charge
+                </Button>
+              ) : (
+                // Once a share is settled it is the FOM's — the front desk asks, and the FOM answers
+                // from the bell (2026-11-26).
+                <Button className="go" onClick={() => setOpen("correct")}>
+                  Ask the FOM to correct a charge
+                </Button>
+              )
+            ) : (
+              <Button kind="secondary" state={chargeable ? "default" : "inert"} title={shut ?? undefined} onClick={() => setOpen("correct")}>
+                Correct a charge
+              </Button>
+            )}
             <Button
               kind="secondary"
               state={chargeable && fom ? "default" : "inert"}
@@ -652,7 +686,7 @@ function FolioTableCard({
             </Button>
           </div>
           <PostChargeDialog entry={entry} open={open === "post"} onClose={() => setOpen(null)} target={target} setTarget={setTarget} />
-          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} />
+          <CorrectionDialog entry={entry} open={open === "correct"} onClose={() => setOpen(null)} ask={correctable && !corr.may} />
           <CreditNoteDialog entry={entry} open={open === "credit"} onClose={() => setOpen(null)} />
         </Live>
       ) : null}
@@ -840,8 +874,31 @@ function HowSettled({
   // extension on file that covers what is left. Comparisons against server figures only —
   // nothing derived here is ever shown.
   const balanceNum = balance ?? 0;
-  const typed = paidNow.trim() === "" ? Number.NaN : Number.parseFloat(paidNow);
   const guestPays = method !== "DIRECT_BILL" && method !== "VOUCHER";
+  // Leave owing (2026-11-26, operator: "when we click on let the guest owing, we can't check out"):
+  // the FOM, or a credit extension on file, lets the guest go with part — or nothing — paid. The card
+  // asks it outright, and with nothing paid it asks no method or receipt. Once a credit extension
+  // covering the whole balance is on file it starts on "leaves owing", which is why it was approved.
+  const [owing, setOwingRaw] = useState(false);
+  const owingTouched = useRef(false);
+  const coversAll = creditActive && ps?.ceilingAmount != null && balance != null && ps.ceilingAmount >= balance;
+  useEffect(() => {
+    if (owingTouched.current || !coversAll) return;
+    setOwingRaw(true);
+    paidTouched.current = true;
+    setPaidNow("");
+  }, [coversAll]);
+  const chooseOwing = (v: boolean) => {
+    owingTouched.current = true;
+    setOwingRaw(v);
+    paidTouched.current = true;
+    setPaidNow(v ? "" : balance != null && balance > 0 ? String(balance) : "");
+  };
+  const mayLeaveOwing = guestPays && balance != null && balance > 0 && (fom || creditActive);
+  // The desk asks the FOM to let the guest leave owing (2026-11-26); the FOM answers on this card.
+  const leaveOwing = useLeaveOwing(entry, folioLive && guestPays && balance != null && balance > 0);
+  const owingNow = owing && mayLeaveOwing;
+  const typed = paidNow.trim() === "" ? (owingNow ? 0 : Number.NaN) : Number.parseFloat(paidNow);
   // Paid in full before Check-out — by the advance, a mid-stay payment — leaves nothing to take:
   // the card says so and closes the bill with no money (2026-11-12, operator: "if payment is fully
   // done, then it should show payment is done, nothing is owed"). The server's balance decides.
@@ -920,7 +977,12 @@ function HowSettled({
     },
     onSuccess: () => {
       setCreditOpen(false);
-      toast.success("Credit extension approved — a part-payment within it can now be settled");
+      // The approval is for the guest to leave owing: the card turns to it (2026-11-26).
+      owingTouched.current = true;
+      setOwingRaw(true);
+      paidTouched.current = true;
+      setPaidNow("");
+      toast.success("Credit extension approved — press Settle to let the guest leave owing");
       refresh();
     },
     onError: (e) => toastRefusal(e, "The credit extension was not recorded"),
@@ -940,6 +1002,8 @@ function HowSettled({
   const paidWait =
     !guestPays || paidInFull
       ? undefined
+      : owingNow && Number.isFinite(typed) && typed >= balanceNum - 0.004
+        ? "that pays the whole balance — choose The guest pays now"
       : !Number.isFinite(typed) || typed < 0
         ? "type what the guest pays now"
         : typed > balanceNum + 0.004
@@ -1100,6 +1164,66 @@ function HowSettled({
               </div>
             ) : (
               <>
+            {mayLeaveOwing ? (
+              <div className="field settle-owing" style={{ marginTop: 12 }} data-owing-choice>
+                <label>
+                  Does the guest pay now?
+                  <Help label="About leaving owing">
+                    {creditActive
+                      ? "The credit extension on file lets the guest leave with part of the bill, or none of it, paid. The rest stays on the bill and is collected after the stay, on the Closed step."
+                      : "As the FOM you can let the guest leave with part of the bill, or none of it, paid. The rest stays on the bill and is collected after the stay, on the Closed step."}
+                  </Help>
+                </label>
+                <Choice
+                  options={[
+                    ["NOW", "The guest pays now"],
+                    ["OWING", "The guest leaves owing"],
+                  ]}
+                  value={owingNow ? "OWING" : "NOW"}
+                  onChange={(v) => chooseOwing(v === "OWING")}
+                />
+              </div>
+            ) : null}
+            {owingNow ? (
+              <div className="form3 settle-row" style={{ marginTop: 12 }}>
+                <div className="field">
+                  <label>
+                    Paid now · Nu. <span className="meta">· optional</span>
+                  </label>
+                  <input
+                    className="input money"
+                    inputMode="decimal"
+                    value={paidNow}
+                    placeholder="0 — nothing now"
+                    onChange={(e) => {
+                      paidTouched.current = true;
+                      setPaidNow(e.target.value);
+                    }}
+                  />
+                  <span className="hint">
+                    {typed > 0 ? "part now — the rest stays owed" : <>nothing now — the <b className="money">{money(balance, cur)}</b> stays owed</>}
+                  </span>
+                </div>
+                {typed > 0 ? (
+                  <>
+                    <div className="field">
+                      <label>How they pay</label>
+                      <select className="input" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                        {methods
+                          .filter(([v]) => v !== "VOUCHER" && v !== "DIRECT_BILL")
+                          .map(([v, l]) => (
+                            <option key={v} value={v}>
+                              {l}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    {bank.needs(method) ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
+                  </>
+                ) : null}
+              </div>
+            ) : (
+            <>
             {/* How they pay · the reference · the amount, in one line (2026-10-30, operator). */}
             <div className="form3 settle-row" style={{ marginTop: 12 }}>
               <div className="field">
@@ -1151,6 +1275,8 @@ function HowSettled({
                 </div>
               )}
             </div>
+            </>
+            )}
             {takesMoney ? <BankFields entry={bank} method={method} /> : null}
             {overCeiling && fom ? (
             <div className="form2 settle-row" style={{ marginTop: 10 }}>
@@ -1175,12 +1301,15 @@ function HowSettled({
                 <Refusal
                   kind="authority"
                   message={`Leaving part of the ${money(balance, cur)} balance unpaid needs the FOM.`}
-                  guidance={`The FOM settles it, or records a credit extension that covers what is left${creditExpired ? " — the one on file has run out" : creditActive ? " — the one on file does not cover it" : ""}.`}
+                  guidance={`Ask the FOM below — they let the guest leave owing, or settle it themselves${creditExpired ? ". The credit extension on file has run out" : creditActive ? ". The credit extension on file does not cover it" : ""}.`}
                 />
               </div>
             ) : null}
               </>
             )}
+            {!paidInFull ? (
+              <LeaveOwingStatus entry={entry} standing={leaveOwing.data} cur={cur} tz={tz} live={live} fom={fom} guest={guest} onDecided={refresh} />
+            ) : null}
             <div className="row-acts" style={{ marginTop: 12 }}>
               <Button
                 className={live && !settleReason ? "go" : undefined}
@@ -1189,8 +1318,13 @@ function HowSettled({
                 reason={live ? settleReason : "only while the booking is at Check-out"}
                 onClick={() => setConfirmOpen(true)}
               >
-                {paidInFull ? "Close the bill" : <>Take payment &amp; settle</>}
+                {/* Only money at the desk is "taken" — a voucher or an account settles with nothing
+                    handed over (2026-11-26, operator: "it's not actually taking payment"). */}
+                {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : owingNow ? (typed > 0 ? <>Take payment &amp; leave the rest owing</> : "Settle — leave it owing") : <>Take payment &amp; settle</>}
               </Button>
+              {!fom && !paidInFull && guestPays ? (
+                <AskFomToLeaveOwing entry={entry} standing={leaveOwing.data} cur={cur} live={live} guest={guest} onDone={refresh} />
+              ) : null}
               {fom && !paidInFull ? (
                 <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
                   {creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing"}
@@ -1203,7 +1337,7 @@ function HowSettled({
             <DsDialog
               open={creditOpen}
               onClose={() => setCreditOpen(false)}
-              title="Let the guest leave owing — a credit extension"
+              title={creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing — a credit extension"}
               caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
               help="The FOM's approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay."
               busy={creditExt.isPending}
@@ -1222,6 +1356,13 @@ function HowSettled({
                 </>
               }
             >
+              {creditActive || creditExpired ? (
+                <p className="sm" style={{ marginTop: 0 }}>
+                  On file: covers up to <b className="money">{money(ps?.ceilingAmount, cur)}</b>
+                  {ps?.creditExtensionExpiresAt ? <> · pay by {fmtDateTime(ps.creditExtensionExpiresAt, tz)}</> : " · no time limit"}
+                  {creditExpired ? " · it has run out" : ""}. A new approval replaces it.
+                </p>
+              ) : null}
               <div className="form2">
                 <div className="field">
                   <label>Covers up to · Nu.</label>
@@ -1255,7 +1396,7 @@ function HowSettled({
       <DsDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title={paidInFull ? "Close the bill" : "Take payment and settle"}
+        title={paidInFull ? "Close the bill" : invoicesParty ? "Settle the bill" : owingNow ? "Settle and leave the rest owing" : "Take payment and settle"}
         caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
         busy={settle.isPending}
         footer={
@@ -1264,7 +1405,7 @@ function HowSettled({
               Not yet
             </Button>
             <Button icon="lock" state={settle.isPending ? "working" : "default"} workingLabel="Settling…" onClick={() => settle.mutate()}>
-              {paidInFull ? "Close the bill" : "Take payment"}
+              {paidInFull ? "Close the bill" : invoicesParty || (owingNow && !(typed > 0)) ? "Settle" : "Take payment"}
             </Button>
           </>
         }
@@ -1274,6 +1415,11 @@ function HowSettled({
           <li>
             {paidInFull ? (
               <>Nothing is owed — no money is taken.</>
+            ) : partial && !(typed > 0) ? (
+              <>
+                Nothing is taken now — the <b className="money">{money(balance, cur)}</b> balance stays owed and is collected after the stay.
+                {fom ? " Your authority as FOM covers it." : creditCovers ? " The credit extension on file covers it." : ""}
+              </>
             ) : partial ? (
               <>
                 The guest pays <b className="money">{money(typed, cur)}</b> now — the rest of the {money(balance, cur)} balance stays owed and is collected after the stay.

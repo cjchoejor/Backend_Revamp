@@ -88,6 +88,14 @@ export type DeskListRow = {
     stillToPay: string | number;
     requestedAt: string;
   }>;
+  /** Waiting for the FOM (2026-11-26): the guest asks to leave owing at Check-out. */
+  leaveOwingRequests?: Array<{ id: string; amountOwed: string | number; guestWords: string; requestedAt: string }>;
+  /** Waiting for the FOM (2026-11-26): a change to the booking prepared at Negotiation. */
+  negotiationAmendmentRequests?: Array<{ id: string; summary: string | null; requestedAt: string }>;
+  /** Waiting for the FOM (2026-11-26): the desk asks to correct a charge on a settled bill. */
+  chargeCorrectionRequests?: Array<{ id: string; reason: string; requestedAt: string }>;
+  /** Waiting for the FOM (2026-11-26): the desk asks to remove a room booked by mistake. */
+  roomRemovalRequests?: Array<{ id: string; roomNumbers: string[]; reason: string; requestedAt: string }>;
   timers: Array<{ timerCode: string; timerType: string; firesAt: string }>;
   custodianName: string | null;
   parkReason: string | null;
@@ -200,7 +208,7 @@ export async function listDeskActivity(session: Session, q: { date: string; acto
 
 /* ---------- the alerts the system sent (2026-10-23) ---------- */
 
-export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
+export type DeskAlertKind = "STAGE_DWELL" | "EXPIRED" | "PAYMENT_REMINDER" | "PAY_LATER_ASKED" | "LEAVE_OWING_ASKED" | "CHARGE_CORRECTION_ASKED" | "VIP_ARRIVAL" | "BLOCK_ENDED" | "REFUND_DUE" | "OTHER";
 export type DeskAlertTarget = "OPERATOR" | "FOM" | "GM";
 
 export type DeskAlert = {

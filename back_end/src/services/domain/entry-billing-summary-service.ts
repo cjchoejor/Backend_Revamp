@@ -5,6 +5,8 @@ import { mulMoney, round2, sumMoneyBy, toDecimal } from "../../lib/money.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { classifyFolioLine, splitCombinedTax } from "../../lib/folio-tax-lines.js";
 import { splitStayAndExtras } from "../../lib/folio-stay-extras.js";
+import { computeNetForBillingModel, listBillingModelBucketsForFolio } from "../../lib/folio-outstanding-per-billing-model.js";
+import { wayMoneyCame } from "./settled-correction-service.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
 
 /**
@@ -72,6 +74,19 @@ export interface EntryBillingSummary {
       feeAmount: number;
       feeWaived: boolean;
     } | null;
+    /**
+     * Rooms leaving early while the rest stay (2026-11-26): `amount` above is already less each
+     * room's nights not slept (its frozen room total for them), as for the whole booking.
+     */
+    roomsLeaving: Array<{
+      roomNumber: string;
+      departureDate: string;
+      unstayedNights: number;
+      forgoneTotal: number;
+      feeAmount: number;
+      feeWaived: boolean;
+      state: string;
+    }>;
   };
   /**
    * Per-room price breakdown (2026-08-13, operator request) — read from the basis quotation's
@@ -130,6 +145,8 @@ export interface EntryBillingSummary {
      * balance floors at zero, so this is the only place the excess shows. Null when none.
      */
     overpaid: number | null;
+    /** Each payer's money above their own share (2026-11-26) — empty when none. */
+    overpaidByPayer: Array<{ billingModel: string; amount: number; wayItCame: string }>;
     /** Per-room charge subtotals (2026-08-14, operator request) — net sum of the folio lines
      *  stamped with each roomId, sealed-selection order preserved by roomNumber sort. Null
      *  when no line carries a room (legacy folios). */
@@ -232,6 +249,10 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
           feeAmount: true,
           feeWaived: true,
         },
+      },
+      roomDepartures: {
+        orderBy: { recordedAt: "asc" },
+        select: { roomNumber: true, departureDate: true, unstayedNights: true, forgoneTotal: true, feeAmount: true, feeWaived: true, state: true },
       },
     },
   });
@@ -549,6 +570,21 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
                 .sort((a, b) => (a.spaceName ?? "").localeCompare(b.spaceName ?? ""))
             : null;
 
+    // Each payer's money above their own share (2026-11-26): a charge corrected after settlement
+    // leaves one payer paid over while another may still owe. Refunded from that payer's share.
+    const overpaidByPayer: Array<{ billingModel: string; amount: number; wayItCame: string }> = [];
+    const primaryPayer = (await prisma.folio.findUnique({ where: { id: entry.folio.id }, select: { billingModel: true } }))?.billingModel ?? null;
+    for (const bucket of await listBillingModelBucketsForFolio(prisma, entry.folio.id)) {
+      const over = (await computeNetForBillingModel(prisma, entry.folio.id, bucket)).neg();
+      if (over.gt(0)) {
+        overpaidByPayer.push({
+          billingModel: bucket,
+          amount: Number(round2(over).toFixed(2)),
+          wayItCame: await wayMoneyCame(prisma, entry.folio.id, bucket, primaryPayer),
+        });
+      }
+    }
+
     const stayExtras = splitStayAndExtras(lines);
     const placeOf = (l: (typeof lines)[number]) => (l.room?.roomNumber ? `Room ${l.room.roomNumber}` : l.space ? l.space.name ?? l.space.code ?? null : null);
     addedTotalDec = stayExtras.extras.length ? stayExtras.extrasTotal : null;
@@ -573,6 +609,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
         const raw = sumMoneyBy(lines, "amount").sub(toDecimal(inAgg._sum.amount)).add(refundedDec).sub(writtenOffDec);
         return raw.lt(0) ? money(raw.neg()) : null;
       })(),
+      overpaidByPayer,
       perRoomCharges,
       perSpaceCharges,
       unassignedCharges:
@@ -637,6 +674,22 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     };
   }
 
+  // Rooms leaving early, the rest staying (2026-11-26): each room's nights not slept come off too.
+  const roomsLeaving = (entry.roomDepartures ?? []).map((d) => ({
+    roomNumber: d.roomNumber,
+    departureDate: d.departureDate.toISOString().slice(0, 10),
+    unstayedNights: d.unstayedNights,
+    forgoneTotal: money(toDecimal(d.forgoneTotal)) ?? 0,
+    feeAmount: money(toDecimal(d.feeAmount)) ?? 0,
+    feeWaived: d.feeWaived,
+    state: d.state,
+  }));
+  if (stayTotalDec != null && roomsLeaving.length) {
+    const less = (entry.roomDepartures ?? []).reduce((t, d) => t.plus(toDecimal(d.forgoneTotal)), new Prisma.Decimal(0));
+    const shortened = stayTotalDec.minus(less);
+    stayTotalDec = shortened.lessThan(0) ? new Prisma.Decimal(0) : shortened;
+  }
+
   const stayTotal = money(stayTotalDec);
   // Once the guest has left (Check-out, Closed) the headline is the bill as it stands
   // (2026-09-18). The stay total is the room-night contract: after an early departure it shrinks
@@ -670,6 +723,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       nights: earlyDepartureBlock ? earlyDepartureBlock.sleptNights : nights,
       perNightAmount,
       earlyDeparture: earlyDepartureBlock,
+      roomsLeaving,
     },
     rooms,
     folio: folioBlock,

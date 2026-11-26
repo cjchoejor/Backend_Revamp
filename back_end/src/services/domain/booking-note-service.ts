@@ -71,6 +71,11 @@ async function paperLabels(prisma: PrismaClient, entryId: string) {
   return { labels, quotes };
 }
 
+/** The day the desk began filing a quotation's internal note as a booking note (2026-10-12). */
+const DESK_STOPPED_QUOTATION_NOTES = new Date("2026-10-12T00:00:00Z");
+/** The words a walk writes into the quotation it makes (room-change-service). */
+const SYSTEM_QUOTATION_NOTE = /^(Room change|Room move|Room \S+ \(|Stay moved|Stay extended|Guest seating restored|Setup change|Rooms? split|Re-?priced)/i;
+
 /** Every note and to-do on the booking, newest first, with the people named. */
 export async function listBookingNotes(prisma: PrismaClient, entryId: string) {
   await entryOf(prisma, entryId);
@@ -85,8 +90,13 @@ export async function listBookingNotes(prisma: PrismaClient, entryId: string) {
   const seenTermNotes = new Set<string>();
   const termNotes: Array<{ quotationId: string; label: string; text: string; createdAt: string; createdBy: string }> = [];
   for (const q of quotes) {
+    // Only a person's note: the desk stopped writing notes into a quotation on 12 Oct, and every
+    // note there since — and the walks' own words before it ("Room change: 601 → 502") — is the
+    // system's (2026-11-26, the hotel's ENT-20261124-0026 read four such "notes").
+    if (q.createdAt >= DESK_STOPPED_QUOTATION_NOTES) continue;
     const t = (q.commercialTerms as Record<string, unknown> | null)?.notes;
     const text = typeof t === "string" ? t.trim() : "";
+    if (SYSTEM_QUOTATION_NOTE.test(text)) continue;
     if (!text || seenTermNotes.has(text)) continue;
     seenTermNotes.add(text);
     termNotes.push({ quotationId: q.id, label: labels.get(q.id)?.label ?? q.referenceNumber, text, createdAt: q.createdAt.toISOString(), createdBy: q.createdBy });
@@ -120,7 +130,8 @@ export async function listBookingNotes(prisma: PrismaClient, entryId: string) {
     items,
     quotationNotes: termNotes.map((t) => ({ ...t, createdByName: name(t.createdBy) })),
     counts: {
-      notes: items.filter((i) => i.kind === "NOTE").length,
+      // Every note the tab lists — a person's notes and their older notes written into a quotation.
+      notes: items.filter((i) => i.kind === "NOTE").length + termNotes.length,
       openTodos: items.filter((i) => i.kind === "TODO" && !i.doneAt).length,
       overdueTodos: items.filter((i) => i.overdue).length,
     },

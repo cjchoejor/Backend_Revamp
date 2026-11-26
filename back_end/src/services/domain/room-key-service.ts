@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { NotFoundError, StageGateBlockedError, ValidationError } from "../../lib/errors.js";
-import { hotelCalendarYmd } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelCalendarYmd } from "../../lib/stay-dates.js";
 
 /**
  * Per-room key lifecycle (2026-08-14, operator ruling).
@@ -67,6 +67,27 @@ function rangesOverlap(a: { start: string | null; end: string | null }, b: { sta
   return a.start < b.end && b.start < a.end;
 }
 
+/**
+ * The guest has left this room for good (2026-11-26): every night of it is behind them and it did not
+ * run to the stay's end — moved out, left early, or taken off as booked by mistake. Its key is not
+ * handed out again: on TEST-ED-LE4-ENT "Issue all keys" re-issued the keys of two rooms removed that
+ * morning. A room kept to the check-out is not "left" on the check-out day — its key comes back at
+ * Check-out.
+ */
+function roomLeft(
+  rows: KeyAssignmentRow[],
+  entry: { checkInDate: Date | null; checkOutDate: Date | null; actualCheckOutDate?: Date | null },
+  todayIso: string,
+): boolean {
+  if (!rows.length) return false;
+  const stayEnd = effectiveCheckOutDate(entry);
+  const stayEndIso = stayEnd ? isoDay(stayEnd) : null;
+  const ends = rows.map((r) => (r.endDate ? isoDay(r.endDate) : stayEndIso));
+  if (ends.some((e) => !e)) return false;
+  const last = (ends as string[]).sort().pop()!;
+  return last <= todayIso && (!stayEndIso || last < stayEndIso);
+}
+
 async function loadEntryForKeys(prisma: PrismaClient, entryId: string) {
   const entry = await prisma.entry.findUnique({
     where: { id: entryId },
@@ -129,6 +150,9 @@ export async function issueRoomKey(prisma: PrismaClient, entryId: string, roomId
 
   if (rows.some(keyOut)) {
     throw new ValidationError(`Room ${room.roomNumber}'s key is already out`);
+  }
+  if (roomLeft(rows, entry, hotelCalendarYmd())) {
+    throw new ValidationError(`The guest has left Room ${room.roomNumber} — its key is not handed out again`);
   }
 
   // The hard gate: any sequential (disjoint-nights) room with its key still out.
@@ -199,7 +223,9 @@ export type BulkKeyIssueSkipReason =
   /** A sequential room's key is still out (the same hard gate the single issue enforces). */
   | "PRIOR_ROOM_KEY_OUTSTANDING"
   /** The guest doesn't enter this room yet — its key is issued on the move day. */
-  | "NOT_YET_OCCUPIED";
+  | "NOT_YET_OCCUPIED"
+  /** The guest has left this room for good — moved out, left early or removed (2026-11-26). */
+  | "LEFT";
 
 export type BulkKeyIssueOutcome = {
   entryId: string;
@@ -294,6 +320,10 @@ export async function issueRoomKeysBulk(
   for (const c of candidates) {
     if (outstanding.has(c.roomId)) {
       skipped.push({ roomId: c.roomId, roomNumber: c.roomNumber, reason: "ALREADY_OUT", blockedBy: [], movesInOn: null });
+      continue;
+    }
+    if (roomLeft(c.rows, entry, todayIso)) {
+      skipped.push({ roomId: c.roomId, roomNumber: c.roomNumber, reason: "LEFT", blockedBy: [], movesInOn: null });
       continue;
     }
     // Default set only: the guest must actually be in the room today.

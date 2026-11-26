@@ -8,6 +8,9 @@ import { apiRequest } from "./client";
 export type VoucherRow = {
   paymentId: string;
   amount: number;
+  /** The voucher as taken, and what a correction after settlement took off it (2026-11-26). */
+  voucherAmount?: number;
+  reducedBy?: number | null;
   currency: string;
   takenAt: string;
   stage: string | null;

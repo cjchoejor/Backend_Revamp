@@ -110,6 +110,22 @@ lookupsRouter.get("/lookups/child-policy", L1, async (_req, res, next) => {
 });
 
 /**
+ * Who may approve what (2026-11-26) — the admin console's toggles, read by the desk so it offers an
+ * act, or the ask to someone who may, exactly as the server will answer. `may` is the asker's own.
+ */
+lookupsRouter.get("/lookups/approvals", L1, async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    const { listApprovalRoles } = await import("../../lib/approval-roles.js");
+    const acts = await listApprovalRoles(prisma);
+    const level = String(req.actor?.level ?? "L1");
+    res.json({
+      acts: Object.fromEntries(Object.entries(acts).map(([k, v]) => [k, { ...v, may: v.levels.includes(level as never) }])),
+    });
+  } catch (e) { next(e); }
+});
+
+/**
  * The fault categories a room or space can be reported under (2026-09-18) — the admin's active
  * list (`deficientCondition.categories`), limited to what the report accepts. The desk carried its
  * own list (Cleanliness, Equipment, Safety…) that the backend refused, so three of its five

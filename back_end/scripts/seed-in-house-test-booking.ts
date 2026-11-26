@@ -20,6 +20,11 @@
  *            `--arrive-in D` days from the hotel's today (default 0) for `--nights N` (default 1).
  *          · --room-list 202,302 (the rooms by number, in place of picking free ones)
  *          · --agent "Bhutan INC" (booked through that travel agent).
+ *          · --meal-plan CP|MAPL|MAPD|AP (2026-11-26): every guest on that plan, priced at the agency's
+ *            default package (else the room rate given and no meal charge), with the meals frozen
+ *            apart from the room, so the night audit posts its meal-plan line as a real booking's.
+ *          · --payer package (2026-11-26, with --agent): "Package to travel agent · extras to guest" —
+ *            the stay and its meals on the agency's voucher, anything posted later to the guest.
  *          Every room sleeps two adults, so the party is two a room.
  *
  * Shape (mirrors what the real S1→S7 walk leaves behind, minimally): guest profile, inquiry,
@@ -48,8 +53,9 @@ const SLEPT = Math.max(0, Number(arg("--slept", "2")));
 // Checking out today needs a night slept: a stay is at least one night.
 const AHEAD = Math.max(SLEPT > 0 ? 0 : 1, Number(arg("--ahead", "4")));
 const GUEST = arg("--guest", "Early Leaver").trim().split(/\s+/);
-const GUEST_FIRST = GUEST[0] || "Early";
-const GUEST_LAST = GUEST.slice(1).join(" ") || "Leaver";
+// The house name rule: the last word is the last name, the rest the first (lib/person-name.ts).
+const GUEST_FIRST = (GUEST.length > 1 ? GUEST.slice(0, -1).join(" ") : GUEST[0]) || "Early";
+const GUEST_LAST = (GUEST.length > 1 ? GUEST[GUEST.length - 1] : "") || "Leaver";
 const RATE = Number(arg("--rate", "2000"));
 const ROOM = arg("--room", "");
 const ROOM_LIST = arg("--room-list", "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -59,6 +65,8 @@ const IN_HOUSE = STAGE === "S7";
 const ARRIVE_IN = Math.max(0, Number(arg("--arrive-in", "0")));
 const NIGHTS_AHEAD = Math.max(1, Number(arg("--nights", "1")));
 const AGENT = arg("--agent", "").trim();
+const MEAL_PLAN = ["CP", "MAPL", "MAPD", "AP"].includes(arg("--meal-plan", "").toUpperCase()) ? arg("--meal-plan", "").toUpperCase() : "";
+const PAYER_MODEL = arg("--payer", "guest") === "package" ? "TOUR_OPERATOR_VOUCHER" : "GUEST_PAY";
 // --by-type seals the rooms as the system's choice by room type, as the Inquiry step does when the desk picks
 // by type (2026-11-25): its papers to an agency read "Room 1", not the numbers. Without it, by number.
 const BY_TYPE = argv.includes("--by-type");
@@ -95,6 +103,9 @@ async function clean() {
   if (!COMMIT) return;
   await prisma.voucherCollection.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.roomDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
+  // An ask to remove a room booked by mistake (2026-11-26).
+  await prisma.roomRemovalRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.timerRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.keyReturnRecord.deleteMany({ where: { entryId: { in: ids } } });
@@ -106,6 +117,10 @@ async function clean() {
   await prisma.interimPaymentRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.stayExtensionRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.advanceApplication.deleteMany({ where: { folioId: { in: folioIds } } });
+  // A credit extension approved on the fixture (2026-11-26).
+  await prisma.chargeCorrectionRequest.deleteMany({ where: { OR: [{ folioId: { in: folioIds } }, { entryId: { in: ids } }] } });
+  await prisma.leaveOwingRequest.deleteMany({ where: { OR: [{ folioId: { in: folioIds } }, { entryId: { in: ids } }] } });
+  await prisma.creditExtensionCeilingRecord.deleteMany({ where: { OR: [{ folioId: { in: folioIds } }, { entryId: { in: ids } }] } });
   // Invoice lines point at their invoice (FK) — a fixture that reached a tax invoice left them.
   await prisma.invoiceLine.deleteMany({ where: { invoice: { entryId: { in: ids } } } });
   await prisma.invoice.deleteMany({ where: { entryId: { in: ids } } });
@@ -137,6 +152,9 @@ async function clean() {
   const moveIds = [...new Set((await prisma.roomMoveLeg.findMany({ where: { entryId: { in: ids } }, select: { moveId: true } })).map((l) => l.moveId))];
   await prisma.roomMoveLeg.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.roomMove.deleteMany({ where: { id: { in: moveIds }, legs: { none: {} } } });
+  // Notes, to-dos and requests typed on the fixture (2026-11-26).
+  await prisma.bookingNote.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.guestRequest.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.entry.deleteMany({ where: { id: { in: ids } } });
   await prisma.inquiry.deleteMany({ where: { id: { startsWith: P } } });
   // An identity check or a guest row typed on the fixture outlives the booking (its entry is set to
@@ -226,7 +244,43 @@ async function main() {
         })),
       )
     : null;
-  const perRoomOf = (roomId: string) => aptTotals?.perRoom.find((x) => x.roomId === roomId) ?? null;
+  // A meal plan (2026-11-26): priced at the agency's default package as the quotation prices it.
+  const pkg = MEAL_PLAN && agent
+    ? await prisma.ratePackage.findFirst({ where: { travelAgentId: agent.id, effectiveTo: null }, orderBy: [{ isDefault: "desc" }, { effectiveFrom: "desc" }] })
+    : null;
+  const mealCounts = (n: number) => ({
+    mealPlanCpCount: MEAL_PLAN === "CP" ? n : 0,
+    mealPlanMaplCount: MEAL_PLAN === "MAPL" ? n : 0,
+    mealPlanMapdCount: MEAL_PLAN === "MAPD" ? n : 0,
+    mealPlanApCount: MEAL_PLAN === "AP" ? n : 0,
+  });
+  const dec = (v: Prisma.Decimal | null | undefined) => (v == null ? new Prisma.Decimal(0) : new Prisma.Decimal(v));
+  const roomRate = pkg ? new Prisma.Decimal(pkg.roomBaseRate) : new Prisma.Decimal(RATE);
+  const mealTotals = MEAL_PLAN && !aptTotals
+    ? computeQuotationCompositionTotals(
+        rooms.map((r) => ({
+          roomId: r.id,
+          roomNumber: r.roomNumber,
+          input: { occupantCount: 2, adultCount: 2, extraBedCount: 0, ...mealCounts(2), startDate: checkIn, endDate: checkOut },
+          ctx: {
+            defaultRoomRate: roomRate,
+            defaultExtraBedRate: dec(pkg?.extraBedRate),
+            defaultBreakfastRate: dec(pkg?.breakfastRate),
+            defaultLunchRate: dec(pkg?.lunchRate),
+            defaultDinnerRate: dec(pkg?.dinnerRate),
+            defaultCpRate: pkg?.cpRate ?? null,
+            defaultMapLunchRate: pkg?.mapLunchRate ?? null,
+            defaultMapDinnerRate: pkg?.mapDinnerRate ?? null,
+            defaultApRate: pkg?.apRate ?? null,
+            serviceChargeRate: sc,
+            gstRate: gst,
+            nights,
+          },
+        })),
+      )
+    : null;
+  const compTotals = aptTotals ?? mealTotals;
+  const perRoomOf = (roomId: string) => compTotals?.perRoom.find((x) => x.roomId === roomId) ?? null;
 
   console.log(
     `${STAGE} test booking${agent ? ` through ${agent.displayName}` : ""}: room${rooms.length > 1 ? "s" : ""} ${rooms.map((r) => r.roomNumber).join(", ")} · stay ${iso(checkIn)} → ${iso(checkOut)} (${nights} nights${IN_HOUSE ? `, ${SLEPT} slept` : ""}) · rate ${RATE}/night net · frozen subtotal ${subtotal} / total ${total} PER ROOM`,
@@ -235,13 +289,14 @@ async function main() {
 
   const aptTerms = () =>
     ({
-      roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0 })),
+      roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, ...(MEAL_PLAN ? mealCounts(2) : {}) })),
+      ...(pkg ? { ratePackage: { id: pkg.id, name: pkg.name } } : {}),
       compositionTotals: {
-        subtotal: Number(aptTotals!.subtotal.toFixed(2)),
-        serviceCharge: Number(aptTotals!.serviceCharge.toFixed(2)),
-        gst: Number(aptTotals!.gst.toFixed(2)),
-        total: Number(aptTotals!.total.toFixed(2)),
-        perRoom: aptTotals!.perRoom.map((x) => ({
+        subtotal: Number(compTotals!.subtotal.toFixed(2)),
+        serviceCharge: Number(compTotals!.serviceCharge.toFixed(2)),
+        gst: Number(compTotals!.gst.toFixed(2)),
+        total: Number(compTotals!.total.toFixed(2)),
+        perRoom: compTotals!.perRoom.map((x) => ({
           roomId: x.roomId,
           roomNumber: x.roomNumber,
           nights: x.nights,
@@ -265,6 +320,7 @@ async function main() {
       defaultCustodianId: staff.id,
       sourceChannel: agent ? "AGENT" : "DIRECT",
       ...(agent ? { travelAgentId: agent.id, cameInAs: "TRAVEL_AGENT" } : {}),
+      ...(pkg ? { ratePackageId: pkg.id, ratePackageIds: [pkg.id] } : {}),
       notes: "Seeded test booking",
     } as Prisma.InquiryUncheckedCreateInput,
   });
@@ -321,16 +377,20 @@ async function main() {
     data: {
       id: `${P}RES`, entryId: entry.id, segmentId: seg.id,
       frozenRate: new Prisma.Decimal(RATE), frozenRatePlanId: ratePlan?.id ?? `${P}PLAN`,
-      frozenBillingModel: "GUEST_PAY", frozenCheckInDate: checkIn, frozenCheckOutDate: checkOut,
+      frozenBillingModel: PAYER_MODEL, frozenCheckInDate: checkIn, frozenCheckOutDate: checkOut,
       frozenGuestCount: party, confirmedAt: IN_HOUSE ? checkIn : new Date(), confirmedBy: staff.id,
-      ...(aptTotals ? { frozenCommercialTerms: aptTerms() } : {}),
+      ...(compTotals ? { frozenCommercialTerms: aptTerms() } : {}),
     },
   });
   await prisma.entry.update({ where: { id: entry.id }, data: { currentReservationId: `${P}RES` } });
+  // Who pays which charge — the map Set up writes (the package to the agency, extras to the guest).
+  const payerMap = (PAYER_MODEL === "GUEST_PAY"
+    ? { ROOM_CHARGE: "GUEST_PAY", F_AND_B: "GUEST_PAY", SERVICE: "GUEST_PAY", OTHER: "GUEST_PAY", CREDIT_NOTE: "GUEST_PAY" }
+    : { ROOM_CHARGE: PAYER_MODEL, F_AND_B: "GUEST_PAY", SERVICE: "GUEST_PAY", OTHER: "GUEST_PAY", CREDIT_NOTE: "GUEST_PAY" }) as Prisma.InputJsonValue;
   await prisma.folio.create({
     data: IN_HOUSE
-      ? { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: "GUEST_PAY", createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) }
-      : { id: `${P}FOL`, entryId: entry.id, state: "PROVISIONAL", billingModel: "GUEST_PAY", createdBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
+      ? { id: `${P}FOL`, entryId: entry.id, state: "LIVE", billingModel: PAYER_MODEL, billingModelDefaults: payerMap, createdBy: staff.id, convertedToLiveAt: checkIn, convertedBy: staff.id, outstandingBalance: new Prisma.Decimal(0) }
+      : { id: `${P}FOL`, entryId: entry.id, state: "PROVISIONAL", billingModel: PAYER_MODEL, billingModelDefaults: payerMap, createdBy: staff.id, outstandingBalance: new Prisma.Decimal(0) },
   });
   // The FIXATION record, not just the folio column (2026-10-06). The S4 re-freeze reads the latest
   // BillingModelTransitionRecord — `folio.billingModel` is not what Policy 33 consults — so without
@@ -338,7 +398,7 @@ async function main() {
   // with MISSING_BILLING_MODEL, leaving the booking at Set up with the new room's figures unfrozen.
   // Every real in-house booking has one, from `ensureProvisionalFolioAndBillingModel` at Set up.
   await prisma.billingModelTransitionRecord.create({
-    data: { folioId: `${P}FOL`, segmentId: `${P}SEG`, toModel: "GUEST_PAY", createdBy: staff.id, changeSource: "INITIAL_FIXATION" },
+    data: { folioId: `${P}FOL`, segmentId: `${P}SEG`, toModel: PAYER_MODEL, createdBy: staff.id, changeSource: "INITIAL_FIXATION" },
   });
   // The other two Set-up records the S4 re-freeze insists on, for the same reason: a room change
   // or an extension on this fixture re-confirms the reservation, and Policy 33/34 refuse without
@@ -352,7 +412,7 @@ async function main() {
     },
   });
   await prisma.invoice.create({
-    data: { id: `${P}INV`, folioId: `${P}FOL`, entryId: entry.id, invoiceType: "PROFORMA", state: "DRAFT", totalAmount: aptTotals ? aptTotals.total : total } as Prisma.InvoiceUncheckedCreateInput,
+    data: { id: `${P}INV`, folioId: `${P}FOL`, entryId: entry.id, invoiceType: "PROFORMA", state: "DRAFT", totalAmount: compTotals ? compTotals.total : total } as Prisma.InvoiceUncheckedCreateInput,
   });
   // The PRICED BASIS (2026-10-06). Without a quotation carrying `roomCompositions`, a room change
   // or an extension re-quotes from nothing: the silent quote comes out FLAT, so the new room's
@@ -368,8 +428,8 @@ async function main() {
       createdBy: staff.id,
       state: "ACCEPTED",
       acceptedAt: IN_HOUSE ? checkIn : new Date(),
-      totalAmount: aptTotals ? aptTotals.total : total.mul(rooms.length),
-      commercialTerms: aptTotals ? aptTerms() : {
+      totalAmount: compTotals ? compTotals.total : total.mul(rooms.length),
+      commercialTerms: compTotals ? aptTerms() : {
         roomCompositions: rooms.map((r) => ({ roomId: r.id, occupantCount: 2, adultCount: 2, extraBedCount: 0, negotiatedRoomRate: RATE })),
         // The figures a real quotation stores (2026-10-30): net, service charge and GST beside the
         // total, and each room by its number — the booking file's price prints them.

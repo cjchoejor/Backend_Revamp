@@ -26,6 +26,7 @@ import { callerNameOf, guestNameOf } from "@/lib/ds/status";
 import { fmtDay } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 import { groupByRoomType } from "@/lib/ds/group-by-type";
+import { isZeroNightRow } from "@/lib/desk/party-rooms";
 
 function standingOfRoom(r: RoomListItem): RoomStanding {
   if (r.isUnderMaintenance || r.isBlocked) return "ooo";
@@ -172,7 +173,8 @@ function RoomsPageBody() {
       const co = b.checkOutDate?.slice(0, 10) ?? "";
       const spans = b.roomAssignments.length
         ? b.roomAssignments
-            .filter((a) => !!a.room?.roomNumber)
+            // A room left the evening it was reached was never slept in (2026-11-26).
+            .filter((a) => !!a.room?.roomNumber && !isZeroNightRow(a))
             .map((a) => ({ room: a.room!.roomNumber, start: a.startDate?.slice(0, 10) ?? ci, end: a.endDate?.slice(0, 10) ?? co }))
         : b.roomNumbers.map((n) => ({ room: n, start: ci, end: co }));
       for (const sp of spans) {

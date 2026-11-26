@@ -529,6 +529,9 @@ export function IdentityProofBlock({
   entry,
   checkInGate = false,
   collapsible = false,
+  pendingSlots,
+  pendingRoomOf,
+  title,
 }: {
   entry: EntryDetail;
   /** S6 rendering (2026-08-11): hosts the identity VERIFICATION panel at the top (the act
@@ -542,8 +545,18 @@ export function IdentityProofBlock({
    *  the header tag stays live and the pulled number lands either way. S6 stays always-open
    *  (the table is a gate there). */
   collapsible?: boolean;
+  /**
+   * The new guests of rooms being added (2026-11-26): only these rows, keyed as the party will key
+   * them once the rooms join the booking. The booking's own guests, the lead, the confirmation and
+   * the whole-party phone code stay with the booking's own table.
+   */
+  pendingSlots?: PartySlot[];
+  /** Which new room each new guest sleeps in, for the room bands. */
+  pendingRoomOf?: Map<string, string>;
+  title?: string;
 }) {
   const { session } = useSession();
+  const pending = !!pendingSlots;
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(!collapsible);
   const [drafts, setDrafts] = useState<Record<string, DetailDraft>>({});
@@ -554,10 +567,10 @@ export function IdentityProofBlock({
   const [clearFor, setClearFor] = useState<PartySlot | null>(null);
   // A child's age put right (2026-11-10): at Arrival and Check-in, while the booking is live.
   const [ageFor, setAgeFor] = useState<{ index: number; age: number } | null>(null);
-  const ageEditable = (entry.currentStage === "S5" || entry.currentStage === "S6") && entry.status === "ACTIVE";
+  const ageEditable = !pendingSlots && (entry.currentStage === "S5" || entry.currentStage === "S6") && entry.status === "ACTIVE";
   // In house or at Check-out, an age inside the same band may still be put right (2026-11-25) — it
   // prices nothing; the server refuses one that would move the band.
-  const lateAgeEditable = (entry.currentStage === "S7" || entry.currentStage === "S8") && entry.status === "ACTIVE";
+  const lateAgeEditable = !pendingSlots && (entry.currentStage === "S7" || entry.currentStage === "S8") && entry.status === "ACTIVE";
   const [clearDetails, setClearDetails] = useState(false);
   const [clearPhoto, setClearPhoto] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -569,7 +582,7 @@ export function IdentityProofBlock({
   const [phoneCapture, setPhoneCapture] = useState<{ slot: PartySlot | null; url: string; expiresAt: string; baseline: number } | null>(null);
 
   const entryId = entry.id;
-  const slots = partySlots(entry);
+  const slots = pendingSlots ?? partySlots(entry);
 
   const listQuery = useQuery({
     queryKey: ["identity-proofs", entryId],
@@ -646,12 +659,14 @@ export function IdentityProofBlock({
   }, [roomsQuery.data]);
   const roomBySlot = useMemo(
     () =>
-      seatPartyByComposition(
-        entry,
-        policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
-        policyQuery.data?.ageBands.childMaxAge ?? 10,
-      ),
-    [entry, policyQuery.data],
+      pendingSlots
+        ? (pendingRoomOf ?? new Map<string, string>())
+        : seatPartyByComposition(
+            entry,
+            policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+            policyQuery.data?.ageBands.childMaxAge ?? 10,
+          ),
+    [entry, policyQuery.data, pendingSlots, pendingRoomOf],
   );
 
   // Seating invariants (2026-08-21, operator ruling — "make sure no room is empty and everyone
@@ -659,15 +674,15 @@ export function IdentityProofBlock({
   // assigned yet" here with no way out. The strip names the gap; the button restores it
   // through the backend's governed repair (the setup-only room-change journey — nobody moves,
   // nothing goes to the guest), so the seating becomes the booking's frozen terms again.
-  const seatingIssues = useMemo(
-    () =>
-      partySeatingIssues(
-        entry,
-        policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
-        policyQuery.data?.ageBands.childMaxAge ?? 10,
-      ),
-    [entry, policyQuery.data],
-  );
+  const seatingIssues = useMemo(() => {
+    const issues = partySeatingIssues(
+      entry,
+      policyQuery.data?.ageBands.youngChildMaxAge ?? 5,
+      policyQuery.data?.ageBands.childMaxAge ?? 10,
+    );
+    // The new guests are seated by the table being added; the booking's own seating is not this table's.
+    return pendingSlots ? { ...issues, ok: true } : issues;
+  }, [entry, policyQuery.data, pendingSlots]);
   const [seatingOpen, setSeatingOpen] = useState(false);
   const canRepairSeating = ["S5", "S6", "S7"].includes(entry.currentStage) && entry.status === "ACTIVE";
   const repairSeatingM = useMutation({
@@ -1192,7 +1207,7 @@ export function IdentityProofBlock({
             <ChevronRight style={{ width: 13, height: 13 }} />
           ))}
         <Fingerprint style={{ width: 13, height: 13 }} />
-        Guest details &amp; ID proof
+        {title ?? <>Guest details &amp; ID proof</>}
         <span className="ln" />
         {slots.length > 0 && (
           <span className={`tag${allCovered ? "" : " warn"}`}>
@@ -1366,7 +1381,7 @@ export function IdentityProofBlock({
           <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
             {/* One QR for the WHOLE party — the phone lists every guest and files each photo
                 under the guest picked there, so nobody scans per-row codes for a big group. */}
-            {slots.length > 1 && (
+            {slots.length > 1 && !pending && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -1536,6 +1551,7 @@ export function IdentityProofBlock({
                     {/* The lead mark (2026-10-23): one adult row is the lead — the guest the
                         check-in verification is for. A child row never carries it. */}
                     {slot.key.startsWith("A") &&
+                      !pending &&
                       (() => {
                         const isLead = slot.key === leadKey;
                         const blocked = !isLead && (lockedFor(leadKey) || lockedFor(slot.key));
@@ -1719,7 +1735,7 @@ export function IdentityProofBlock({
                             <ScanLine style={{ width: 13, height: 13 }} />
                           </button>
                         )}
-                        {(covered || !sameDraft(draft, EMPTY_DRAFT)) && (
+                        {(covered || !sameDraft(draft, EMPTY_DRAFT)) && !pending && (
                           <button
                             type="button"
                             className="btn btn-ghost btn-sm"
@@ -1752,7 +1768,7 @@ export function IdentityProofBlock({
       </div>
 
       {/* One act under the table, at its bottom right (2026-10-29) — see confirmAllM. */}
-      {slots.length > 0 && (
+      {slots.length > 0 && !pending && (
         <div className="id-confirm">
           {allLocked && !needsVerify ? (
             <>
@@ -1832,7 +1848,7 @@ export function IdentityProofBlock({
         </div>
       )}
 
-      {unassigned.length > 0 && (
+      {unassigned.length > 0 && !pending && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 4 }}>
             Stored on this booking without a named guest
@@ -1841,7 +1857,7 @@ export function IdentityProofBlock({
         </div>
       )}
 
-      {earlierStays.length > 0 && (
+      {earlierStays.length > 0 && !pending && (
         <div style={{ marginTop: 8 }}>
           <div style={{ fontSize: 11, fontWeight: 600, color: "var(--ink-3)", marginBottom: 4 }}>
             On file from earlier stays

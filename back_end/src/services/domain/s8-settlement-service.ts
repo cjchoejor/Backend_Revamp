@@ -616,13 +616,21 @@ export async function initiateSettlement(
     // Prisma extension `enforceFolioSettledOutstandingGuard` reads `_base` (non-interactive client),
     // so it does not see `recomputeFolioOutstandingBalance` writes on `tx`. Passing explicit zero
     // lets the guard use `data.outstandingBalance` when closing to SETTLED.
+    // The guest leaves with this settlement unless it is one payer's share and another share is still
+    // open at the desk. Only then is the bill sealed: the master bill freezes at the seal, so a share
+    // settled early (the agency's voucher) left it reading "frozen" while the guest still owed and a
+    // charge could still be corrected (2026-11-26).
+    let lastPayerAtDesk = false;
+    if (isBucketScoped && !wholeFolioBalanceClosed && !isDirectBillPath) {
+      lastPayerAtDesk = (await otherSettlementBucketsStillOpen(tx, folioId, targetBucket)).length === 0;
+    }
+    const guestLeaves = !isBucketScoped || wholeFolioBalanceClosed || isDirectBillPath || lastPayerAtDesk;
     const updated = await tx.folio.update({
       where: { id: folioId },
       data: {
         state: nextState,
         ...(nextState === FolioState.SETTLED ? { outstandingBalance: 0 } : {}),
-        closedAt: new Date(),
-        closedBy: actorId,
+        ...(guestLeaves ? { closedAt: new Date(), closedBy: actorId } : { closedAt: null, closedBy: null }),
       },
     });
 
@@ -639,11 +647,7 @@ export async function initiateSettlement(
     // shortfall, a direct bill) — what it still owes is then S9's to collect, not a reason to keep
     // the guest's room. Without this, settling the agency's voucher short left the room OCCUPIED
     // and Closed unreachable.
-    let lastPayerAtDesk = false;
-    if (isBucketScoped && !wholeFolioBalanceClosed && !isDirectBillPath) {
-      lastPayerAtDesk = (await otherSettlementBucketsStillOpen(tx, folioId, targetBucket)).length === 0;
-    }
-    if (!isBucketScoped || wholeFolioBalanceClosed || isDirectBillPath || lastPayerAtDesk) {
+    if (guestLeaves) {
       await s8CheckoutService.completeCheckoutPhysicalDeparture(tx as unknown as PrismaClient, folio.entryId, actorId);
     }
 

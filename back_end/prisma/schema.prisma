@@ -1288,6 +1288,8 @@ model Entry {
   timers                       TimerRecord[]
   interimPaymentRequests       InterimPaymentRequest[]
   checkInPaymentDeferrals      CheckInPaymentDeferral[]
+  leaveOwingRequests           LeaveOwingRequest[]
+  chargeCorrectionRequests     ChargeCorrectionRequest[]
   stayExtensionRequests        StayExtensionRequest[]
   negotiationAmendmentRequests NegotiationAmendmentRequest[]
   roomMoveLegs                 RoomMoveLeg[]
@@ -1296,6 +1298,8 @@ model Entry {
   bookingNotes                 BookingNote[]
   guestRequests                GuestRequest[]
   earlyDeparture               EarlyDepartureRecord?
+  roomDepartures               RoomDepartureRecord[]
+  roomRemovalRequests          RoomRemovalRequest[]
   writeOffRecords              WriteOffRecord[]
   followUpTasks                FollowUpTaskRecord[]
   communications               CommunicationRecord[]
@@ -2013,9 +2017,11 @@ model Folio {
   writeOffRecords         WriteOffRecord[]
   billingModelTransitions BillingModelTransitionRecord[]
 
-  interimPaymentRequests  InterimPaymentRequest[]
-  checkInPaymentDeferrals CheckInPaymentDeferral[]
-  advanceApplications     AdvanceApplication[]
+  interimPaymentRequests   InterimPaymentRequest[]
+  checkInPaymentDeferrals  CheckInPaymentDeferral[]
+  leaveOwingRequests       LeaveOwingRequest[]
+  chargeCorrectionRequests ChargeCorrectionRequest[]
+  advanceApplications      AdvanceApplication[]
 
   @@map("folios")
 }
@@ -2267,6 +2273,11 @@ model PaymentRecord {
   /// (2026-11-09). A money-out row and a money-in row share it; together they move no money.
   tripTransferRef String?
 
+  /// A money-out row of method VOUCHER that makes an agency's voucher cover less (2026-11-26): a
+  /// charge on the agency's share corrected after the bill was settled, before the agency paid.
+  /// Points at the VOUCHER money-in row it reduces. Nothing is handed over — the agency owes less.
+  voucherReducedId String?
+
   /// Which room / space this money settles (2026-09-09, PMS-237). Charges have carried a room
   /// since 2026-08-14 but payments never did, so "room 202 is paid, 203 still owes" could not
   /// be answered — a per-room balance is that room's charges MINUS its payments, and only the
@@ -2285,6 +2296,7 @@ model PaymentRecord {
   @@index([roomId])
   @@index([spaceId])
   @@index([tripTransferRef])
+  @@index([voucherReducedId])
   @@map("payment_records")
 }
 
@@ -3268,6 +3280,80 @@ model CheckInPaymentDeferral {
   @@map("checkin_payment_deferrals")
 }
 
+/// The desk asks the FOM to let a guest leave owing at Check-out (2026-11-26, operator: "when such
+/// things where fom or other person needs to approve, does it pop up on the fom and gm's page").
+/// It shows in the FOM's and GM's bell; approving records the FOM's credit extension for what the
+/// bill still owes, and the desk then settles with part, or nothing, paid.
+model LeaveOwingRequest {
+  id                String    @id @default(uuid())
+  entryId           String
+  folioId           String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status            String    @default("REQUESTED")
+  /// What the bill still owed when the desk asked — the folio's balance, the server's figure.
+  amountOwed        Decimal   @db.Decimal(15, 2)
+  /// What the guest said.
+  guestWords        String
+  requestedBy       String
+  requestedLevel    String?
+  requestedAt       DateTime  @default(now())
+  decisionNote      String?
+  decidedBy         String?
+  decidedLevel      String?
+  decidedAt         DateTime?
+  /// The day the guest will pay by, when the FOM set one (the credit extension's own time).
+  payBy             DateTime?
+  /// The credit extension the approval recorded.
+  creditExtensionId String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("leave_owing_requests")
+}
+
+/// The front desk asks the FOM to correct a charge on a settled bill (2026-11-26, operator: "if front
+/// desk wants to do it, it should ask the FOM for permission … and they approve it from
+/// notification or do it by themselves"). Approving runs the correction itself (`correctCharge`),
+/// in the same transaction that marks the request approved.
+model ChargeCorrectionRequest {
+  id               String    @id @default(uuid())
+  entryId          String
+  folioId          String
+  /// The charge line to correct.
+  originalLineId   String
+  /// ADJUST (by `value`, signed) · SET_NET (the charge's net becomes `value`).
+  mode             String
+  value            Decimal   @db.Decimal(15, 2)
+  /// The charge's net when the desk asked (the original and every earlier correction of it).
+  netBefore        Decimal   @db.Decimal(15, 2)
+  reason           String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status           String    @default("REQUESTED")
+  requestedBy      String
+  requestedLevel   String?
+  requestedAt      DateTime  @default(now())
+  decisionNote     String?
+  decidedBy        String?
+  decidedLevel     String?
+  decidedAt        DateTime?
+  /// The correction line the approval posted.
+  correctionLineId String?
+  /// What followed it (settled-correction-service): the refund due, a voucher reduced, invoices replaced.
+  outcome          Json?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+  folio Folio @relation(fields: [folioId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("charge_correction_requests")
+}
+
 /// A stay extension in flight (2026-08-21, operator ruling): the guest wants N more nights.
 /// Requested at S7 → the extra nights are CLAIMED (held) for the guest while the interim
 /// invoice goes out and the payment comes in → committed through the governed room-change
@@ -3577,6 +3663,81 @@ model StayExtensionRequest {
 /// assignment rows are end-dated in the same transaction and `Entry.actualCheckOutDate` is the
 /// denormalised copy every date reader uses. Never the rate: the slept nights stay priced exactly
 /// as the freeze priced them (the rate is not renegotiated as a condition of leaving early).
+/// One room of a booking leaving before the booking's check-out while the rest stay (2026-11-26,
+/// operator: "leaving early as all the rooms or just particular rooms … today or some date before
+/// the actual booking's check-out date … bill it together with the other stays or pay their own …
+/// cancellation policy applied and a waive option for higher authority"). The room's row ends on
+/// `departureDate` with its frozen figures scaled to the nights slept; the hotel's early-departure
+/// fee is posted on the room. A room leaving on a later day is SCHEDULED until the desk releases it.
+model RoomDepartureRecord {
+  id                   String    @id // readable ED-YYYYMMDD-NNNN — allocateReadableId("EARLY_DEPARTURE"), shared counter
+  entryId              String
+  roomId               String
+  roomNumber           String
+  assignmentId         String
+  departureDate        DateTime
+  /// The row's end before the departure (exclusive).
+  originalEndDate      DateTime
+  sleptNights          Int
+  unstayedNights       Int
+  forgoneSubtotal      Decimal   @db.Decimal(15, 2)
+  forgoneTotal         Decimal   @db.Decimal(15, 2)
+  frozenSubtotalBefore Decimal?  @db.Decimal(15, 2)
+  frozenTotalBefore    Decimal?  @db.Decimal(15, 2)
+  /// The resolved `earlyDeparture.penalty` rule and the arithmetic behind `feeAmount`.
+  feeBasis             Json
+  /// NET fee posted on the room (its SC/GST follow); 0 when waived or none.
+  feeAmount            Decimal   @db.Decimal(15, 2)
+  feeWaived            Boolean   @default(false)
+  feeFolioLineId       String?
+  /// TOGETHER — the room's charges stay on the booking's bill; OWN — the room pays its share when it leaves.
+  billing              String
+  /// LEAVING — the guest leaves early (the fee applies); REMOVED — the hotel booked it by mistake (no fee).
+  kind                 String    @default("LEAVING")
+  /// SCHEDULED — leaves on a later day; LEFT — the room was released.
+  state                String    @default("SCHEDULED")
+  leftAt               DateTime?
+  leftBy               String?
+  reason               String
+  recordedAt           DateTime  @default(now())
+  recordedBy           String
+  recordedByLevel      String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, state])
+  @@map("room_departure_records")
+}
+
+/// The front desk asks the FOM, the GM or an admin to remove a room booked by mistake (2026-11-26).
+/// Approving runs the removal as the approver; the records it made are named.
+model RoomRemovalRequest {
+  id             String    @id @default(uuid())
+  entryId        String
+  roomIds        String[]
+  roomNumbers    String[]
+  departureDate  DateTime
+  /// What went wrong, in the desk's words.
+  reason         String
+  /// REQUESTED · APPROVED · REJECTED · WITHDRAWN
+  status         String    @default("REQUESTED")
+  requestedBy    String
+  requestedLevel String?
+  requestedAt    DateTime  @default(now())
+  decidedBy      String?
+  decidedLevel   String?
+  decidedAt      DateTime?
+  decisionNote   String?
+  recordIds      String[]  @default([])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  entry Entry @relation(fields: [entryId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId, status])
+  @@map("room_removal_requests")
+}
+
 model EarlyDepartureRecord {
   id                   String   @id // readable ED-YYYYMMDD-NNNN — allocateReadableId("EARLY_DEPARTURE")
   entryId              String   @unique

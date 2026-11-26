@@ -1,3 +1,4 @@
+import { readApprovalRoles } from "../../lib/approval-roles.js";
 import { EntryStatus, QuotationState, Stage, type PrismaClient } from "@prisma/client";
 import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
@@ -335,11 +336,13 @@ async function planCombine(prisma: PrismaClient, actor: Actor, keptId: string, o
       where: { entryId: kept.id, segmentId: kept.segmentId, state: { in: [QuotationState.SENT, QuotationState.ACCEPTED] } },
       select: { state: true },
     });
+    const who = await readApprovalRoles(prisma as never, "NEGOTIATION_CHANGE");
     try {
       enforceNegotiationAmendmentAuthority({
         actorLevel: actor.actorLevel,
         quotationSent: live.some((q) => q.state === QuotationState.SENT),
         quotationAccepted: live.some((q) => q.state === QuotationState.ACCEPTED),
+        approvers: { may: who.levels.includes(actor.actorLevel as never), words: who.words },
       });
       if (live.length > 0) authority = { needed: "L2", ok: true, why: "This booking's quotation has gone to the guest — combining is the FOM's" };
     } catch (e) {

@@ -86,7 +86,7 @@ foliosRouter.post(
       // per the fixation model.
       const inv =
         entry.currentStage === Stage.S9
-          ? await s9Service.issueInvoiceAtS9(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey, billingModel })
+          ? await s9Service.issueInvoiceAtS9(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey, billingModel, actorLevel: req.actor!.level })
           : entry.currentStage === Stage.S8
             ? await s8SettlementService.issueInvoiceAtS8(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey, billingModel })
             : await s3FolioService.issueInvoice(prisma, req.params.id, req.actor!.actorId, { entryId, templateKey });
@@ -327,7 +327,7 @@ foliosRouter.post("/folios/:id/charges", requireActorLevel("L1"), validateBody(p
 
 foliosRouter.post("/folios/:id/corrections", requireActorLevel("L1"), validateBody(correctFolioChargeRequestSchema), async (req, res, next) => {
   try {
-    const created = await s7FolioLinesService.correctCharge(prisma, req.params.id, req.actor!.actorId, req.body);
+    const created = await s7FolioLinesService.correctCharge(prisma, req.params.id, req.actor!.actorId, req.body, { actorLevel: req.actor!.level });
     res.json(created);
   } catch (e) {
     next(e);
@@ -451,7 +451,7 @@ foliosRouter.get("/folios/:id/settlement-buckets", requireActorLevel("L1"), asyn
  */
 foliosRouter.post("/folios/:id/refunds", requireActorLevel("L2"), validateBody(recordFolioRefundRequestSchema), async (req, res, next) => {
   try {
-    const { amount, paymentMethod, reference, reason, bankName, journalNumber } = req.body;
+    const { amount, paymentMethod, reference, reason, bankName, journalNumber, billingModel } = req.body;
     const created = await recordFolioRefund(prisma, req.params.id, { actorId: req.actor!.actorId, actorLevel: req.actor!.level }, {
       amount,
       paymentMethod,
@@ -459,6 +459,7 @@ foliosRouter.post("/folios/:id/refunds", requireActorLevel("L2"), validateBody(r
       reason,
       bankName: bankName ?? null,
       journalNumber: journalNumber ?? null,
+      billingModel: billingModel ?? null,
     });
     res.status(201).json(created);
   } catch (e) {
@@ -473,6 +474,9 @@ foliosRouter.post("/folios/:id/settle", requireActorLevel("L1"), validateBody(in
       // authority, never a body field an L1 could type.
       actorLevel: req.actor!.level,
     });
+    // A "leave owing" request still waiting has nothing left to ask once the bill is settled.
+    const { closeLeaveOwingOnSettle } = await import("../../services/domain/leave-owing-service.js");
+    await closeLeaveOwingOnSettle(prisma, req.params.id, req.actor!.actorId).catch(() => 0);
     res.json(updated);
   } catch (e) {
     next(e);

@@ -118,6 +118,12 @@ const WORDS: Record<string, string> = {
   "FOLIO.DOCUMENT_SENT": "Bill sent",
   "FOLIO.MASTER_BILL_PRINTED": "Master bill printed",
   "FOLIO.CHARGE_POSTED": "Charge posted",
+  "FOLIO.CREDIT_NOTE_POSTED": "Credit note posted",
+  "FOLIO.WHO_PAYS_SET": "Who pays set",
+  "BOOKING_ROOMS.PICKED_BY_TYPE": "Rooms picked by type",
+  "ENTRY.INTAKE_UPDATED": "Booking details saved",
+  "KEY_RETURN.RECORDED": "Keys taken back",
+  "NIGHT_AUDIT.BOOKING_NIGHT_POSTED": "The night posted to the bill",
   "FOLIO.CORRECTION_POSTED": "Charge corrected",
   "CHECK_IN.COMPLETED": "Checked in",
   "CHECK_IN.KEYS_ISSUED": "Keys handed over",
@@ -201,6 +207,31 @@ const WORDS: Record<string, string> = {
   "ENTRY.S5.CANCELLED": "Cancelled",
   "ENTRY.S6.CANCELLED": "Cancelled at check-in",
   "HOUSEKEEPING.ROOM_CLEANED": "Room cleaned",
+  "FOLIO.CHARGE_CORRECTED_AFTER_SETTLEMENT": "A charge corrected after the bill was settled",
+  "INVOICE.REPLACED": "Tax invoice replaced by a new one",
+  "LEAVE_OWING.REQUESTED": "Asked the FOM to let the guest leave owing",
+  "LEAVE_OWING.APPROVED": "The FOM let the guest leave owing",
+  "LEAVE_OWING.REJECTED": "The FOM turned down leaving owing",
+  "LEAVE_OWING.WITHDRAWN": "The request to leave owing was taken back",
+  "NOTIFICATION.LEAVE_OWING_REQUESTED": "The FOM was told the guest asks to leave owing",
+  "ENTRY.EARLY_DEPARTURE_RECORDED": "Leaving early recorded",
+  "ENTRY.ROOMS_LEAVING_EARLY": "Rooms leaving early recorded",
+  "ROOM.RELEASED_MID_STAY": "A room left — the rest of the booking stays",
+  "ENTRY.ROOM_ADDED": "A room added as a stay of its own",
+  "ENTRY.ROOMS_ADDED": "Rooms added to the booking, with their guests",
+  "ENTRY.ROOMS_REMOVED": "A room booked by mistake came off the stay",
+  "ROOM_REMOVAL.REQUESTED": "Asked to remove a room booked by mistake",
+  "ROOM_REMOVAL.APPROVED": "Removing the room was approved",
+  "ROOM_REMOVAL.REJECTED": "Removing the room was turned down",
+  "ROOM_REMOVAL.WITHDRAWN": "The ask to remove a room was taken back",
+  "NOTIFICATION.ROOM_REMOVAL_REQUESTED": "Those who approve were told the desk asks to remove a room",
+  "ENTRY.CREATED_AS_ADDED_ROOM": "Made for a room added to another stay",
+  "FOLIO.SEAL_STAMP_CLEARED": "The bill read as sealed by mistake — put back",
+  "CHARGE_CORRECTION.REQUESTED": "Asked the FOM to correct a charge",
+  "CHARGE_CORRECTION.APPROVED": "The FOM corrected the charge",
+  "CHARGE_CORRECTION.REJECTED": "The FOM turned down correcting a charge",
+  "CHARGE_CORRECTION.WITHDRAWN": "The request to correct a charge was taken back",
+  "NOTIFICATION.CHARGE_CORRECTION_REQUESTED": "The FOM was told the desk asks to correct a charge",
   "CHECKIN_PAYMENT.DEFERRAL_REQUESTED": "Asked the FOM to let the guest pay the rest later",
   "CHECKIN_PAYMENT.DEFERRAL_APPROVED": "The FOM let the guest pay the rest later",
   "CHECKIN_PAYMENT.DEFERRAL_REJECTED": "The FOM turned down paying the rest later",
@@ -258,7 +289,7 @@ export function traceWords(ev: TraceEvent): string {
 }
 
 type RoomChangedPayload = {
-  kind?: "ROOM" | "SETUP" | "EXTENSION" | "DATES" | "SPLIT";
+  kind?: "ROOM" | "SETUP" | "EXTENSION" | "DATES" | "SPLIT" | "ADD";
   /** Rooms split off to their own booking (2026-10-14). */
   split?: { roomNumbers?: string[] | null; toLabel?: string | null } | null;
   /** A date move (2026-10-13): the stay before and after, the rooms that changed row, the price choice per room. */
@@ -292,6 +323,10 @@ function roomChangeWords(p: RoomChangedPayload): string {
   const from = p.fromRoom?.roomNumber ?? null;
   const tos = (p.toRooms ?? []).map((r) => r.roomNumber).filter((n): n is string => !!n);
   if (p.kind === "EXTENSION") return "Stay extended";
+  if (p.kind === "ADD") {
+    const nos = (p as { added?: { roomNumbers?: string[] } | null }).added?.roomNumbers ?? [];
+    return nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(" + ")} added to the booking` : "Rooms added to the booking";
+  }
   if (p.kind === "SPLIT") {
     const nos = p.split?.roomNumbers ?? [];
     return nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(" + ")} split off to ${nos.length > 1 ? "their" : "its"} own booking` : "Rooms split off to their own booking";

@@ -332,6 +332,8 @@ export function VouchersTab({ tz }: { tz: string }) {
                   <td>{fmtDate(r.takenAt)}</td>
                   <td className="num money">
                     <b>{money(r.amount, r.currency)}</b>
+                    {/* A charge on the agency's share corrected after settlement (2026-11-26). */}
+                    {r.reducedBy ? <div className="meta">voucher {money(r.voucherAmount ?? r.amount, r.currency)} · {money(r.reducedBy, r.currency)} less after a correction</div> : null}
                   </td>
                   <td>
                     {r.received ? (

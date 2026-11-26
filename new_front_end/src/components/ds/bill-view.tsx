@@ -192,8 +192,12 @@ export function BillPage({ entryId }: { entryId: string }) {
                       <tr key={p.id} className={`static${pi % 2 ? " alt" : ""}`}>
                         <td className="nowrap">{fmtDateTime(p.at, tz)}</td>
                         <td>
-                          {p.direction === "OUT" ? "Refund" : "Received"}
-                          {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
+                          {p.direction === "OUT" && p.method === "VOUCHER"
+                            ? "The agency's voucher reduced"
+                            : <>
+                                {p.direction === "OUT" ? "Refund" : "Received"}
+                                {p.method ? ` · ${METHOD_WORD[p.method] ?? p.method.toLowerCase()}` : ""}
+                              </>}
                           {many ? ` · Stay ${p.stayNo}` : ""}
                           {p.note ? <span className="sub">{p.note}</span> : null}
                         </td>

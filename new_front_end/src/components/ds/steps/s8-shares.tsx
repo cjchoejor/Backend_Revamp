@@ -95,6 +95,10 @@ export function ReferenceField({
  */
 export function settleMethodsFor(model: string | null, agentBooked: boolean, partyBooked: boolean) {
   if (model === "DIRECT_BILL") return SETTLE_METHODS.filter(([v]) => v === "DIRECT_BILL");
+  // Everything to the guest: the guest's own money only (2026-11-26, operator: "showing the agent's
+  // voucher for how they pay makes no sense since it's not the agent paying"). The server refuses
+  // the rest too (Policy 33).
+  if (model === "GUEST_PAY") return SETTLE_METHODS.filter(([v]) => v !== "DIRECT_BILL" && v !== "VOUCHER");
   return SETTLE_METHODS.filter(([v]) =>
     // A company takes the package too since 2026-11-05: it is invoiced, it issues no voucher.
     v === "VOUCHER" ? agentBooked || (model === "TOUR_OPERATOR_VOUCHER" && !partyBooked) : v === "DIRECT_BILL" ? partyBooked || model === "GOVERNMENT" : true,
