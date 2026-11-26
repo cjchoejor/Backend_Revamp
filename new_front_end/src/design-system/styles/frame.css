@@ -3188,3 +3188,22 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .add-room-type-head { display: flex; gap: var(--s3); align-items: baseline; flex-wrap: wrap; }
 .ds .add-room-type-head b { font-size: 15px; }
 .ds .add-room-type .leaving-rooms { margin-top: var(--s2); }
+
+/* The Keys card as a table (2026-11-26): the rooms in use, then apart the rooms the guest has left. */
+.ds .keys-table td {
+  vertical-align: middle;
+}
+.ds .keys-table .keys-act {
+  text-align: right;
+  white-space: nowrap;
+}
+.ds .keys-table tr.keys-sep td {
+  padding-top: var(--s3);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-3, #6b6f6c);
+  background: var(--paper, #f2f3f0);
+}
+.ds .keys-table tr.keys-left td {
+  color: var(--ink-3, #6b6f6c);
+}

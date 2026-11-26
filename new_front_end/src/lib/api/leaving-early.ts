@@ -174,6 +174,7 @@ export type AddRoomRow = {
   bedType: string | null;
   maxCapacity: number | null;
   maxExtraBeds: number | null;
+  maxChildren: number | null;
   availability: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
   perNight: Array<{ date: string; status: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE"; guest: string | null; bookingRef: string | null }>;
   selectable: boolean;

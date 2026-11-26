@@ -98,6 +98,8 @@ type KeyRow = {
   lostNote: string | null;
   lostAt: string | null;
   vacated: boolean;
+  /** The morning the guest left the room for good (vacated rooms only). */
+  leftOn: string | null;
   movesInToday: boolean;
   movesInLater: boolean;
 };
@@ -122,6 +124,7 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
     // the guests' own check-out day).
     const runsToCheckout = rs.some((r) => !r.endDate || (stayEnd != null && String(r.endDate).slice(0, 10) >= stayEnd));
     const vacated = !!hotelToday && rs.length > 0 && !runsToCheckout && rs.every((r) => r.endDate && String(r.endDate).slice(0, 10) <= hotelToday);
+    const leftOn = vacated ? rs.map((r) => String(r.endDate).slice(0, 10)).sort().pop() ?? null : null;
     return {
       roomId,
       roomNumber: rs[0].room?.roomNumber ?? roomId.slice(0, 8),
@@ -132,6 +135,7 @@ export function keyPlan(entry: EntryDetail, hotelToday: string | null): KeyRow[]
       lostNote: lostRow?.keyLostNote ?? null,
       lostAt: lostRow?.keyLostAt ?? null,
       vacated,
+      leftOn,
       movesInToday: !!hotelToday && stay?.firstNight === hotelToday,
       movesInLater: !!hotelToday && !!stay?.firstNight && stay.firstNight > hotelToday,
     };
@@ -256,11 +260,13 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
     onSuccess: (out) => {
       const n = out.issued.length;
       const notes = out.skipped
-        .filter((s) => s.reason !== "ALREADY_OUT")
+        .filter((s) => s.reason !== "ALREADY_OUT" && s.reason !== "LEFT")
         .map((s) =>
           s.reason === "PRIOR_ROOM_KEY_OUTSTANDING"
             ? `Room ${s.roomNumber} waits for Room ${s.blockedBy.map((b) => b.roomNumber).join(", ")}'s key to come back`
-            : `Room ${s.roomNumber}'s key comes on the move day${s.movesInOn ? ` · ${fmtDay(s.movesInOn)}` : ""}`,
+            : s.reason === "LEFT"
+              ? `the guest has left Room ${s.roomNumber}`
+              : `Room ${s.roomNumber}'s key comes on the move day${s.movesInOn ? ` · ${fmtDay(s.movesInOn)}` : ""}`,
         );
       if (n === 0) toast.info(notes.length ? `No key issued — ${notes.join(" · ")}` : "Every key is already with the guest");
       else {
@@ -276,128 +282,146 @@ export function KeysCard({ entry, emptyNote = false }: { entry: EntryDetail; /**
   const show = plan.length > 1 || plan.some((k) => k.keyOut || k.keyReturned);
   if (!show)
     return emptyNote ? <StepCard title="Keys" icon="key" status="No room keys are kept room by room on this booking — they were counted at check-in." /> : null;
-  const bulk = plan.filter((k) => !k.keyOut && !k.movesInLater && blockersFor(k.roomId).length === 0);
+  // The rooms the guest is in (or moves into later), and apart, the rooms they have left for good —
+  // moved out, left early or taken off (2026-11-26, operator on LE4: "Issue all keys" offered the keys
+  // of two rooms removed that morning). A room left with its key still out stays above: it is owed.
+  const inUse = plan.filter((k) => !k.vacated || k.keyOut);
+  const left = plan.filter((k) => k.vacated && !k.keyOut);
+  const now = inUse.filter((k) => !k.vacated && !k.movesInLater);
+  const withGuest = now.filter((k) => k.keyOut).length;
+  const bulk = now.filter((k) => !k.keyOut && !k.lost && blockersFor(k.roomId).length === 0);
   const busy = issue.isPending || giveBack.isPending || issueAll.isPending || loseKey.isPending;
+  const keyChip = (k: KeyRow) =>
+    k.keyOut ? (
+      <Chip tone="default" icon="key">
+        with the guest
+      </Chip>
+    ) : k.lost ? (
+      <Chip tone="warning" icon="key">
+        lost
+      </Chip>
+    ) : k.keyReturned ? (
+      <Chip tone="success" icon="check">
+        back
+      </Chip>
+    ) : (
+      <Chip tone="quiet">not issued</Chip>
+    );
 
   return (
     <StepCard
       title="Keys"
       icon="key"
       meta="A room move is a key swap — take the old room's key back first; the new room's key will not issue while the old one is still out. The last key comes back at Check-out."
-    >
-      {plan.length > 1 ? (
-        <div className="bind provisional" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 12px", marginBottom: 6 }}>
-          <span className="sm">
-            {plan.filter((k) => k.keyOut).length} of {plural(plan.length, "key")} with the guest
-            {bulk.length ? <span className="meta"> · {bulk.length} ready to hand over</span> : null}
-          </span>
+      status={
+        <span className={withGuest === now.length ? "ok-ink" : "warn-ink"}>
+          {withGuest} of {now.length} {now.length === 1 ? "room in use has its key" : "rooms in use have their key"} with the guest
+        </span>
+      }
+      right={
+        bulk.length >= 2 && !past ? (
           <Live>
             <Button
-              kind="secondary"
+              className="go"
               compact
               icon="key"
-              state={issueAll.isPending ? "working" : bulk.length === 0 || busy ? "inert" : "default"}
-              title={
-                bulk.length === 0
-                  ? "No key can go out now — each is with the guest, waiting on a swap, or waiting for its move day"
-                  : `Hand over Room ${bulk.map((k) => k.roomNumber).join(", ")}'s key${bulk.length === 1 ? "" : "s"} in one go`
-              }
-              workingLabel="Issuing…"
+              state={issueAll.isPending ? "working" : busy ? "inert" : "default"}
+              workingLabel="Handing over…"
+              title={`Room ${bulk.map((k) => k.roomNumber).join(", ")}`}
               onClick={() => issueAll.mutate()}
             >
-              Issue all keys
+              {`Hand over the ${bulk.length} keys`}
             </Button>
           </Live>
-        </div>
-      ) : null}
-      {plan.map((k) => {
-        const blockers = k.keyOut ? [] : blockersFor(k.roomId);
-        const unlock = blockers.length ? `after Room ${blockers.map((b) => b.roomNumber).join(", ")}'s key is back` : null;
-        const note =
-          k.keyOut && k.vacated ? (
-            <span className="sm warn-ink">The guest has moved out of this room — collect its key</span>
-          ) : unlock ? (
-            <span className="sm warn-ink">This key goes out {unlock}</span>
-          ) : !k.keyOut && !k.keyReturned && k.movesInToday ? (
-            <span className="sm warn-ink">The guest moves in today — hand over the key</span>
-          ) : !k.keyOut && !k.keyReturned && k.movesInLater && k.stay?.firstNight ? (
-            <span className="meta">Moves in {fmtDay(k.stay.firstNight)} — key on the move day</span>
-          ) : null;
-        return (
-          <div
-            key={k.roomId}
-            style={{ borderTop: "1px solid var(--line)", padding: "8px 0", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}
-          >
-            <span style={{ display: "grid", gap: 2 }}>
-              <span className="sm">
-                <b>Room {k.roomNumber}</b>
-                {k.stay ? <span className="meta"> · {k.stay.label}</span> : null}
-              </span>
-              {note}
-              {k.lost ? (
+        ) : undefined
+      }
+    >
+      <table className="table keys-table">
+        <thead>
+          <tr>
+            <th>Room</th>
+            <th>Nights</th>
+            <th>Key</th>
+            <th aria-label="Act" />
+          </tr>
+        </thead>
+        <tbody>
+          {inUse.map((k) => {
+            const blockers = k.keyOut ? [] : blockersFor(k.roomId);
+            const unlock = blockers.length ? `after Room ${blockers.map((b) => b.roomNumber).join(", ")}'s key is back` : null;
+            const note =
+              k.keyOut && k.vacated ? (
+                <span className="sm stop-ink">The guest has moved out — take the key back</span>
+              ) : unlock ? (
+                <span className="sm warn-ink">Goes out {unlock}</span>
+              ) : !k.keyOut && !k.keyReturned && !k.lost && k.movesInToday ? (
+                <span className="sm warn-ink">The guest moves in today — hand over the key</span>
+              ) : !k.keyOut && !k.keyReturned && k.movesInLater && k.stay?.firstNight ? (
+                <span className="meta">Moves in {fmtDay(k.stay.firstNight)} — key on the move day</span>
+              ) : k.lost ? (
                 <span className="sm warn-ink">
                   Lost{k.lostAt ? ` ${fmtStamp(k.lostAt, tz)}` : ""}
                   {k.lostNote ? <> — &ldquo;{k.lostNote}&rdquo;</> : null}
                 </span>
-              ) : null}
-            </span>
-            <span className="row-acts" style={{ alignItems: "center" }}>
-              {k.keyOut ? (
-                <>
-                  <Chip tone="default" icon="key">
-                    with the guest
-                  </Chip>
-                  {k.vacated && !past ? (
-                    <Button kind="secondary" compact state={busy ? "inert" : "default"} onClick={() => giveBack.mutate(k.roomId)}>
-                      Take the key back
-                    </Button>
-                  ) : null}
-                  {past ? null : (
-                    <Button kind="secondary" compact state={busy ? "inert" : "default"} onClick={() => setAskLost({ roomId: k.roomId, roomNumber: k.roomNumber })}>
-                      Lost
-                    </Button>
-                  )}
-                </>
-              ) : k.lost ? (
-                <>
-                  <Chip tone="warning" icon="key">
-                    key lost
-                  </Chip>
-                  {past ? null : (
+              ) : null;
+            return (
+              <tr key={k.roomId} data-key-room={k.roomNumber}>
+                <td>
+                  <b>Room {k.roomNumber}</b>
+                  {note ? <div>{note}</div> : null}
+                </td>
+                <td className="sm">{k.stay?.label ?? "—"}</td>
+                <td>{keyChip(k)}</td>
+                <td className="keys-act">
+                  {past ? null : k.keyOut ? (
+                    <span className="row-acts">
+                      {k.vacated ? (
+                        <Button className="go" compact state={busy ? "inert" : "default"} onClick={() => giveBack.mutate(k.roomId)}>
+                          Take the key back
+                        </Button>
+                      ) : null}
+                      <Button kind="quiet" compact state={busy ? "inert" : "default"} onClick={() => setAskLost({ roomId: k.roomId, roomNumber: k.roomNumber })}>
+                        Lost
+                      </Button>
+                    </span>
+                  ) : k.movesInLater ? null : (
                     <Button
-                      kind="secondary"
+                      kind={k.keyReturned ? "quiet" : "secondary"}
                       compact
                       icon="key"
                       state={busy || unlock ? "inert" : "default"}
                       title={unlock ? `This key goes out ${unlock}` : undefined}
                       onClick={() => issue.mutate(k.roomId)}
                     >
-                      Issue a new key
+                      {k.lost ? "Issue a new key" : k.keyReturned ? "Issue again" : "Hand over the key"}
                     </Button>
                   )}
-                </>
-              ) : k.keyReturned ? (
-                <>
-                  <Chip tone="success" icon="check">
-                    key returned
-                  </Chip>
-                  {past ? null : (
-                    <Button kind="quiet" compact state={busy || unlock ? "inert" : "default"} title={unlock ? `This key goes out ${unlock}` : undefined} onClick={() => issue.mutate(k.roomId)}>
-                      Issue again
-                    </Button>
-                  )}
-                </>
-              ) : past ? (
-                <Chip tone="quiet">not issued</Chip>
-              ) : (
-                <Button kind="secondary" compact icon="key" state={busy || unlock ? "inert" : "default"} title={unlock ? `This key goes out ${unlock}` : undefined} onClick={() => issue.mutate(k.roomId)}>
-                  Issue the key
-                </Button>
-              )}
-            </span>
-          </div>
-        );
-      })}
+                </td>
+              </tr>
+            );
+          })}
+          {left.length ? (
+            <tr className="keys-sep">
+              <td colSpan={4}>Rooms the guest has left</td>
+            </tr>
+          ) : null}
+          {left.map((k) => (
+            <tr key={k.roomId} className="keys-left" data-key-room={k.roomNumber}>
+              <td>
+                <b>Room {k.roomNumber}</b>
+                {k.lost && k.lostNote ? (
+                  <div className="sm muted">
+                    Lost — &ldquo;{k.lostNote}&rdquo;
+                  </div>
+                ) : null}
+              </td>
+              <td className="sm">{k.leftOn ? `Left ${fmtDay(k.leftOn)}` : (k.stay?.label ?? "—")}</td>
+              <td>{keyChip(k)}</td>
+              <td />
+            </tr>
+          ))}
+        </tbody>
+      </table>
       <ReasonDialog
         open={!!askLost}
         onClose={() => setAskLost(null)}

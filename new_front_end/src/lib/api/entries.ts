@@ -332,7 +332,7 @@ export type BulkKeyIssueOutcome = {
   skipped: Array<{
     roomId: string;
     roomNumber: string;
-    reason: "ALREADY_OUT" | "PRIOR_ROOM_KEY_OUTSTANDING" | "NOT_YET_OCCUPIED";
+    reason: "ALREADY_OUT" | "PRIOR_ROOM_KEY_OUTSTANDING" | "NOT_YET_OCCUPIED" | "LEFT";
     blockedBy: Array<{ roomId: string; roomNumber: string }>;
     movesInOn: string | null;
   }>;

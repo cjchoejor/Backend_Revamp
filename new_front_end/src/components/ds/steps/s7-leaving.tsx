@@ -57,7 +57,7 @@ import { getSettlementTargets, recordTargetPayment } from "@/lib/api/split-settl
 import { fmtDay, money } from "@/lib/ds/format";
 import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
-import { Choice, DsDialog, NotNow, StepCard, SubTabs, atLeast, toastRefusal, useRefreshEntry } from "./kit";
+import { Choice, DsDialog, NotNow, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { PartDone, PartHead } from "./s7-extend";
 
 const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
@@ -1089,6 +1089,8 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<AddRoomsOutcome | null>(null);
   const [moveFor, setMoveFor] = useState<{ room: AddRoomRow; holder: AddRoomHolder } | null>(null);
+  const [capMsg, setCapMsg] = useState<string | null>(null);
+  const [childrenTyped, setChildrenTyped] = useState("");
   const [legs, setLegs] = useState<RoomMoveLegInput[] | null>(null);
   const idOf = (n: number) => `ar-part-${n}-${entry.id}`;
   const goTo = (n: number) => {
@@ -1154,7 +1156,26 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
 
   const stateOf = (n: number): "open" | "done" | "waiting" => (d.at === n ? "open" : d.at > n ? "done" : "waiting");
   const part1Ready = picked.length > 0;
-  const part2Why = !d.adults && !d.kids.length ? "Say who sleeps in the new rooms" : !agesOk ? "Type each child's age (0 to 17)" : guests < picked.length ? `Each room needs a guest — ${picked.length} rooms, ${guests} guests` : null;
+  // What the picked rooms sleep (2026-11-26, operator: "it shouldn't allow more than the max occupant"):
+  // guests aged 11 and over against the beds and extra beds, children under 11 against the rooms' children.
+  const bedsBase = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0), 0);
+  const sleepsMax = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0) + (r.maxExtraBeds ?? 0), 0);
+  const kidsMax = Math.min(8, pickedRows.reduce((n, r) => n + (r.maxChildren ?? 0), 0));
+  const childMaxAge = policy.data?.ageBands.childMaxAge ?? 10;
+  const grownUps = adults + ages.filter((a) => a > childMaxAge).length;
+  const littleOnes = ages.filter((a) => a <= childMaxAge).length;
+  const roomsWordPicked = roomsWord(pickedRows.map((r) => r.roomNumber));
+  const part2Why = !adults && !d.kids.length
+    ? "Say who sleeps in the new rooms"
+    : !agesOk
+      ? "Type each child's age (0 to 17)"
+      : grownUps > sleepsMax
+        ? `${roomsWordPicked} sleep${pickedRows.length === 1 ? "s" : ""} at most ${sleepsMax} aged 11 and over — ${grownUps} asked`
+        : littleOnes > kidsMax
+          ? `${roomsWordPicked} take${pickedRows.length === 1 ? "s" : ""} at most ${kidsMax} under 11 — ${littleOnes} asked`
+          : guests < picked.length
+            ? `Each room needs a guest — ${picked.length} rooms, ${guests} guests`
+            : null;
   const part3Why = !comps.length ? "Seat the new guests in the table" : faults.length ? faults[0] : null;
   useEffect(() => {
     if (d.at > 1 && !part1Ready) set({ at: 1 });
@@ -1339,26 +1360,54 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
               <div className="form3">
                 <div className="field">
                   <label>Adults</label>
-                  <select className="input" value={d.adults} onChange={(e) => set({ adults: e.target.value })}>
-                    <option value="">—</option>
-                    {Array.from({ length: 13 }, (_, i) => i).map((n) => (
-                      <option key={n} value={String(n)}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    value={d.adults}
+                    placeholder="0"
+                    aria-describedby={`ar-sleeps-${entry.id}`}
+                    onChange={(e) => {
+                      const typed = e.target.value.replace(/\D/g, "").slice(0, 2);
+                      if (typed && Number(typed) > sleepsMax) {
+                        setCapMsg(`${roomsWordPicked} sleep${pickedRows.length === 1 ? "s" : ""} at most ${sleepsMax} aged 11 and over, extra beds included`);
+                        set({ adults: String(sleepsMax) });
+                        return;
+                      }
+                      setCapMsg(null);
+                      set({ adults: typed });
+                    }}
+                  />
                 </div>
                 <div className="field">
                   <label>Children</label>
-                  <select className="input" value={d.kids.length} onChange={(e) => set({ kids: Array.from({ length: Number(e.target.value) }, (_, i) => d.kids[i] ?? "") })}>
-                    {Array.from({ length: 9 }, (_, i) => i).map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    value={d.kids.length ? String(d.kids.length) : childrenTyped}
+                    placeholder="0"
+                    onChange={(e) => {
+                      const typed = e.target.value.replace(/\D/g, "").slice(0, 1);
+                      let n = typed ? Number(typed) : 0;
+                      if (n > kidsMax) {
+                        setCapMsg(`${roomsWordPicked} take${pickedRows.length === 1 ? "s" : ""} at most ${kidsMax} ${kidsMax === 1 ? "child" : "children"} under 11`);
+                        n = kidsMax;
+                      } else setCapMsg(null);
+                      setChildrenTyped(typed && n === 0 ? "0" : "");
+                      set({ kids: Array.from({ length: n }, (_, i) => d.kids[i] ?? "") });
+                    }}
+                  />
                 </div>
               </div>
+              <p className="sm" id={`ar-sleeps-${entry.id}`} style={{ margin: 0 }}>
+                {roomsWordPicked} sleep{pickedRows.length === 1 ? "s" : ""} {bedsBase}
+                {sleepsMax > bedsBase ? ` (${sleepsMax} with ${sleepsMax - bedsBase === 1 ? "an extra bed" : "extra beds"})` : ""} aged 11 and over, and take{pickedRows.length === 1 ? "s" : ""} up to {kidsMax}{" "}
+                {kidsMax === 1 ? "child" : "children"} under 11.
+              </p>
+              {capMsg ? (
+                <p className="sm stop-ink ar-cap" role="alert">
+                  <b>!</b> {capMsg}
+                </p>
+              ) : null}
               {d.kids.length ? (
                 <div className="form3">
                   {d.kids.map((k, i) => (
@@ -1384,8 +1433,10 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
           {stateOf(3) === "open" ? (
             <>
               {!rateMay ? <p className="sm" style={{ margin: 0 }}>In house the rates are the GM&rsquo;s — the rooms are priced at their own rates. Meals and extra beds are yours to set.</p> : null}
-              <RoomCompositionPlanner
-                key={`${picked.join(",")}|${adults}|${d.kids.join(",")}`}
+              {/* The older table tool takes its look from .desk-root (2026-11-26: drawn bare, its columns ran together). */}
+              <Tool>
+                <RoomCompositionPlanner
+                  key={`${picked.join(",")}|${adults}|${d.kids.join(",")}`}
                 tableOnly
                 autoSeat={!comps.length}
                 initialCompositions={comps.length ? comps : undefined}
@@ -1400,7 +1451,8 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                 persistKey={`add-room:${entry.id}`}
                 onChange={setComps}
                 onFaultsChange={setFaults}
-              />
+                />
+              </Tool>
               <PartDone ready={!part3Why} why={part3Why} onDone={() => goTo(4)} />
             </>
           ) : null}
@@ -1427,7 +1479,9 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                 onChange={(v) => set({ docs: v })}
               />
               {d.docs === "NOW" ? (
-                <IdentityProofBlock entry={entry} pendingSlots={pendingSlots} pendingRoomOf={pendingRoomOf} title="The new guests' documents" />
+                <Tool>
+                  <IdentityProofBlock entry={entry} pendingSlots={pendingSlots} pendingRoomOf={pendingRoomOf} title="The new guests' documents" />
+                </Tool>
               ) : d.docs === "LATER" ? (
                 <p className="sm" style={{ margin: 0 }}>
                   Once the rooms are added, the new guests&rsquo; rows are in the booking file&rsquo;s Guests tab › Edit — the same table, photo and phone code as at Check-in.
