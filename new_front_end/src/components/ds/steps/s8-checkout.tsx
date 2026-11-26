@@ -55,6 +55,7 @@ import {
   Facts,
   Live,
   PaperDrawer,
+  Choice,
   ReasonDialog,
   SeeRow,
   StageActs,
@@ -840,8 +841,29 @@ function HowSettled({
   // extension on file that covers what is left. Comparisons against server figures only —
   // nothing derived here is ever shown.
   const balanceNum = balance ?? 0;
-  const typed = paidNow.trim() === "" ? Number.NaN : Number.parseFloat(paidNow);
   const guestPays = method !== "DIRECT_BILL" && method !== "VOUCHER";
+  // Leave owing (2026-11-26, operator: "when we click on let the guest owing, we can't check out"):
+  // the FOM, or a credit extension on file, lets the guest go with part — or nothing — paid. The card
+  // asks it outright, and with nothing paid it asks no method or receipt. Once a credit extension
+  // covering the whole balance is on file it starts on "leaves owing", which is why it was approved.
+  const [owing, setOwingRaw] = useState(false);
+  const owingTouched = useRef(false);
+  const coversAll = creditActive && ps?.ceilingAmount != null && balance != null && ps.ceilingAmount >= balance;
+  useEffect(() => {
+    if (owingTouched.current || !coversAll) return;
+    setOwingRaw(true);
+    paidTouched.current = true;
+    setPaidNow("");
+  }, [coversAll]);
+  const chooseOwing = (v: boolean) => {
+    owingTouched.current = true;
+    setOwingRaw(v);
+    paidTouched.current = true;
+    setPaidNow(v ? "" : balance != null && balance > 0 ? String(balance) : "");
+  };
+  const mayLeaveOwing = guestPays && balance != null && balance > 0 && (fom || creditActive);
+  const owingNow = owing && mayLeaveOwing;
+  const typed = paidNow.trim() === "" ? (owingNow ? 0 : Number.NaN) : Number.parseFloat(paidNow);
   // Paid in full before Check-out — by the advance, a mid-stay payment — leaves nothing to take:
   // the card says so and closes the bill with no money (2026-11-12, operator: "if payment is fully
   // done, then it should show payment is done, nothing is owed"). The server's balance decides.
@@ -920,7 +942,12 @@ function HowSettled({
     },
     onSuccess: () => {
       setCreditOpen(false);
-      toast.success("Credit extension approved — a part-payment within it can now be settled");
+      // The approval is for the guest to leave owing: the card turns to it (2026-11-26).
+      owingTouched.current = true;
+      setOwingRaw(true);
+      paidTouched.current = true;
+      setPaidNow("");
+      toast.success("Credit extension approved — press Settle to let the guest leave owing");
       refresh();
     },
     onError: (e) => toastRefusal(e, "The credit extension was not recorded"),
@@ -940,6 +967,8 @@ function HowSettled({
   const paidWait =
     !guestPays || paidInFull
       ? undefined
+      : owingNow && Number.isFinite(typed) && typed >= balanceNum - 0.004
+        ? "that pays the whole balance — choose The guest pays now"
       : !Number.isFinite(typed) || typed < 0
         ? "type what the guest pays now"
         : typed > balanceNum + 0.004
@@ -1100,6 +1129,66 @@ function HowSettled({
               </div>
             ) : (
               <>
+            {mayLeaveOwing ? (
+              <div className="field settle-owing" style={{ marginTop: 12 }} data-owing-choice>
+                <label>
+                  Does the guest pay now?
+                  <Help label="About leaving owing">
+                    {creditActive
+                      ? "The credit extension on file lets the guest leave with part of the bill, or none of it, paid. The rest stays on the bill and is collected after the stay, on the Closed step."
+                      : "As the FOM you can let the guest leave with part of the bill, or none of it, paid. The rest stays on the bill and is collected after the stay, on the Closed step."}
+                  </Help>
+                </label>
+                <Choice
+                  options={[
+                    ["NOW", "The guest pays now"],
+                    ["OWING", "The guest leaves owing"],
+                  ]}
+                  value={owingNow ? "OWING" : "NOW"}
+                  onChange={(v) => chooseOwing(v === "OWING")}
+                />
+              </div>
+            ) : null}
+            {owingNow ? (
+              <div className="form3 settle-row" style={{ marginTop: 12 }}>
+                <div className="field">
+                  <label>
+                    Paid now · Nu. <span className="meta">· optional</span>
+                  </label>
+                  <input
+                    className="input money"
+                    inputMode="decimal"
+                    value={paidNow}
+                    placeholder="0 — nothing now"
+                    onChange={(e) => {
+                      paidTouched.current = true;
+                      setPaidNow(e.target.value);
+                    }}
+                  />
+                  <span className="hint">
+                    {typed > 0 ? "part now — the rest stays owed" : <>nothing now — the <b className="money">{money(balance, cur)}</b> stays owed</>}
+                  </span>
+                </div>
+                {typed > 0 ? (
+                  <>
+                    <div className="field">
+                      <label>How they pay</label>
+                      <select className="input" value={method} onChange={(e) => setMethod(e.target.value as typeof method)}>
+                        {methods
+                          .filter(([v]) => v !== "VOUCHER" && v !== "DIRECT_BILL")
+                          .map(([v, l]) => (
+                            <option key={v} value={v}>
+                              {l}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    {bank.needs(method) ? null : <ReferenceField method={method} value={ref} onChange={setRef} takesMoney={takesMoney} />}
+                  </>
+                ) : null}
+              </div>
+            ) : (
+            <>
             {/* How they pay · the reference · the amount, in one line (2026-10-30, operator). */}
             <div className="form3 settle-row" style={{ marginTop: 12 }}>
               <div className="field">
@@ -1151,6 +1240,8 @@ function HowSettled({
                 </div>
               )}
             </div>
+            </>
+            )}
             {takesMoney ? <BankFields entry={bank} method={method} /> : null}
             {overCeiling && fom ? (
             <div className="form2 settle-row" style={{ marginTop: 10 }}>
@@ -1191,7 +1282,7 @@ function HowSettled({
               >
                 {/* Only money at the desk is "taken" — a voucher or an account settles with nothing
                     handed over (2026-11-26, operator: "it's not actually taking payment"). */}
-                {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : <>Take payment &amp; settle</>}
+                {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : owingNow ? (typed > 0 ? <>Take payment &amp; leave the rest owing</> : "Settle — leave it owing") : <>Take payment &amp; settle</>}
               </Button>
               {fom && !paidInFull ? (
                 <Button kind="secondary" state={live ? "default" : "inert"} onClick={() => setCreditOpen(true)}>
@@ -1205,7 +1296,7 @@ function HowSettled({
             <DsDialog
               open={creditOpen}
               onClose={() => setCreditOpen(false)}
-              title="Let the guest leave owing — a credit extension"
+              title={creditActive || creditExpired ? "Change the credit extension" : "Let the guest leave owing — a credit extension"}
               caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
               help="The FOM's approval covers what is left, so a part-payment (even nothing) can settle and the rest is collected after the stay."
               busy={creditExt.isPending}
@@ -1224,6 +1315,13 @@ function HowSettled({
                 </>
               }
             >
+              {creditActive || creditExpired ? (
+                <p className="sm" style={{ marginTop: 0 }}>
+                  On file: covers up to <b className="money">{money(ps?.ceilingAmount, cur)}</b>
+                  {ps?.creditExtensionExpiresAt ? <> · pay by {fmtDateTime(ps.creditExtensionExpiresAt, tz)}</> : " · no time limit"}
+                  {creditExpired ? " · it has run out" : ""}. A new approval replaces it.
+                </p>
+              ) : null}
               <div className="form2">
                 <div className="field">
                   <label>Covers up to · Nu.</label>
@@ -1257,7 +1355,7 @@ function HowSettled({
       <DsDialog
         open={confirmOpen}
         onClose={() => setConfirmOpen(false)}
-        title={paidInFull ? "Close the bill" : invoicesParty ? "Settle the bill" : "Take payment and settle"}
+        title={paidInFull ? "Close the bill" : invoicesParty ? "Settle the bill" : owingNow ? "Settle and leave the rest owing" : "Take payment and settle"}
         caseLines={[<b key="g">{guest}</b>, `${entry.id} · balance ${money(balance, cur)}`]}
         busy={settle.isPending}
         footer={
@@ -1266,7 +1364,7 @@ function HowSettled({
               Not yet
             </Button>
             <Button icon="lock" state={settle.isPending ? "working" : "default"} workingLabel="Settling…" onClick={() => settle.mutate()}>
-              {paidInFull ? "Close the bill" : invoicesParty ? "Settle" : "Take payment"}
+              {paidInFull ? "Close the bill" : invoicesParty || (owingNow && !(typed > 0)) ? "Settle" : "Take payment"}
             </Button>
           </>
         }
@@ -1276,6 +1374,11 @@ function HowSettled({
           <li>
             {paidInFull ? (
               <>Nothing is owed — no money is taken.</>
+            ) : partial && !(typed > 0) ? (
+              <>
+                Nothing is taken now — the <b className="money">{money(balance, cur)}</b> balance stays owed and is collected after the stay.
+                {fom ? " Your authority as FOM covers it." : creditCovers ? " The credit extension on file covers it." : ""}
+              </>
             ) : partial ? (
               <>
                 The guest pays <b className="money">{money(typed, cur)}</b> now — the rest of the {money(balance, cur)} balance stays owed and is collected after the stay.
