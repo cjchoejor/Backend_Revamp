@@ -103,6 +103,7 @@ async function clean() {
   if (!COMMIT) return;
   await prisma.voucherCollection.deleteMany({ where: { folioId: { in: folioIds } } });
   await prisma.earlyDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.roomDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.timerRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.keyReturnRecord.deleteMany({ where: { entryId: { in: ids } } });

@@ -1298,6 +1298,7 @@ model Entry {
   bookingNotes                 BookingNote[]
   guestRequests                GuestRequest[]
   earlyDeparture               EarlyDepartureRecord?
+  roomDepartures            RoomDepartureRecord[]
   writeOffRecords              WriteOffRecord[]
   followUpTasks                FollowUpTaskRecord[]
   communications               CommunicationRecord[]
@@ -3661,6 +3662,50 @@ model StayExtensionRequest {
 /// assignment rows are end-dated in the same transaction and `Entry.actualCheckOutDate` is the
 /// denormalised copy every date reader uses. Never the rate: the slept nights stay priced exactly
 /// as the freeze priced them (the rate is not renegotiated as a condition of leaving early).
+/// One room of a booking leaving before the booking's check-out while the rest stay (2026-11-26,
+/// operator: "leaving early as all the rooms or just particular rooms … today or some date before
+/// the actual booking's check-out date … bill it together with the other stays or pay their own …
+/// cancellation policy applied and a waive option for higher authority"). The room's row ends on
+/// `departureDate` with its frozen figures scaled to the nights slept; the hotel's early-departure
+/// fee is posted on the room. A room leaving on a later day is SCHEDULED until the desk releases it.
+model RoomDepartureRecord {
+  id                   String    @id // readable ED-YYYYMMDD-NNNN — allocateReadableId("EARLY_DEPARTURE"), shared counter
+  entryId              String
+  roomId               String
+  roomNumber           String
+  assignmentId         String
+  departureDate        DateTime
+  /// The row's end before the departure (exclusive).
+  originalEndDate      DateTime
+  sleptNights          Int
+  unstayedNights       Int
+  forgoneSubtotal      Decimal   @db.Decimal(15, 2)
+  forgoneTotal         Decimal   @db.Decimal(15, 2)
+  frozenSubtotalBefore Decimal?  @db.Decimal(15, 2)
+  frozenTotalBefore    Decimal?  @db.Decimal(15, 2)
+  /// The resolved `earlyDeparture.penalty` rule and the arithmetic behind `feeAmount`.
+  feeBasis             Json
+  /// NET fee posted on the room (its SC/GST follow); 0 when waived or none.
+  feeAmount            Decimal   @db.Decimal(15, 2)
+  feeWaived            Boolean   @default(false)
+  feeFolioLineId       String?
+  /// TOGETHER — the room's charges stay on the booking's bill; OWN — the room pays its share when it leaves.
+  billing              String
+  /// SCHEDULED — leaves on a later day; LEFT — the room was released.
+  state                String    @default("SCHEDULED")
+  leftAt               DateTime?
+  leftBy               String?
+  reason               String
+  recordedAt           DateTime  @default(now())
+  recordedBy           String
+  recordedByLevel      String
+
+  entry Entry @relation(fields: [entryId], references: [id])
+
+  @@index([entryId, state])
+  @@map("room_departure_records")
+}
+
 model EarlyDepartureRecord {
   id                   String   @id // readable ED-YYYYMMDD-NNNN — allocateReadableId("EARLY_DEPARTURE")
   entryId              String   @unique

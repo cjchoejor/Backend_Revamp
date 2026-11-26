@@ -88,6 +88,8 @@ export function enforceEarlyDepartureDateWithinStay(input: {
   bookedCheckOut: Date;
   departure: Date;
   hotelToday: Date;
+  /** A later day before the booked checkout may be named (2026-11-26): the stay is shortened now. */
+  allowLater?: boolean;
 }) {
   const dep = utcDateOnly(input.departure).getTime();
   const ci = utcDateOnly(input.checkIn).getTime();
@@ -99,7 +101,7 @@ export function enforceEarlyDepartureDateWithinStay(input: {
       `Departure ${ymdUtc(input.departure)} is not before the booked checkout ${ymdUtc(input.bookedCheckOut)} - that is a normal checkout, not an early departure`,
     );
   }
-  if (dep > today) {
+  if (dep > today && !input.allowLater) {
     throw new ValidationError(
       `Departure ${ymdUtc(input.departure)} is ahead of today (${ymdUtc(input.hotelToday)}) - an early departure is recorded on the day the guest leaves`,
     );

@@ -210,7 +210,10 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
     invoice: null,
   };
 
-  const masterAvailable = !!folio && hasLines && (live || !!sealedAt);
+  // A bill one payer's share has settled is neither open nor sealed while the guest is still at the
+  // desk (2026-11-26): its master bill and draft tax invoice read the bill as it stands.
+  const shareSettled = !!folio && !live && !sealedAt && (folio.state === "OUTSTANDING" || folio.state === "SETTLED");
+  const masterAvailable = !!folio && hasLines && (live || !!sealedAt || shareSettled);
   const master: FolioDocumentEntry = {
     kind: "master-bill",
     title: "Master bill",
@@ -227,7 +230,7 @@ export async function listFolioDocuments(prisma: PrismaClient, entryId: string):
     invoice: null,
   };
 
-  const draftAvailable = !finalInvoice && !!folio && hasLines && (live || !!sealedAt);
+  const draftAvailable = !finalInvoice && !!folio && hasLines && (live || !!sealedAt || shareSettled);
   const tax: FolioDocumentEntry = {
     kind: "tax-invoice",
     title: "Tax invoice",

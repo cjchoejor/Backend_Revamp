@@ -110,10 +110,26 @@ export interface EarlyDepartureRoomFigure {
   legacyFlatRate: boolean;
   /** True when the row is actually touched by the shortening (it ran past the departure). */
   shortened: boolean;
+  /**
+   * This room's own early-departure fee, by the same rule (2026-11-26): what is posted on the room
+   * when some rooms leave and the rest stay. NET; null on a room not shortened.
+   */
+  feeAmount: number | null;
 }
 
 export interface EarlyDepartureFigures {
   entryId: string;
+  /**
+   * BOOKING — every room the stay still uses leaves (the stay ends early); ROOMS — only the rooms
+   * named leave and the rest stay on (2026-11-26).
+   */
+  scope: "BOOKING" | "ROOMS";
+  /** The rooms named, when some rooms leave. */
+  roomIds: string[];
+  /** The rooms the stay still uses after the departure date — what the desk picks from. */
+  roomsInUse: Array<{ roomId: string; roomNumber: string | null; roomTypeName: string | null; endDate: string; nightsLeft: number; apartment: boolean }>;
+  /** The departure is a later day: the stay (or the rooms) are shortened now and leave then. */
+  later: boolean;
   hotelToday: string;
   checkIn: string | null;
   bookedCheckOut: string | null;
@@ -179,12 +195,13 @@ const ENTRY_INCLUDE = {
   reservation: true,
   folio: { select: { id: true, state: true, outstandingBalance: true } },
   roomAssignments: {
-    include: { room: { select: { id: true, roomNumber: true, currentClaimState: true } } },
+    include: { room: { select: { id: true, roomNumber: true, currentClaimState: true, roomType: { select: { name: true } } } } },
     orderBy: { createdAt: "asc" as const },
   },
   segments: { orderBy: { segmentNumber: "desc" as const }, take: 1, select: { id: true } },
   stayExtensionRequests: { where: { state: { in: ["REQUESTED", "BILLED", "PAID"] } }, select: { id: true, state: true } },
   earlyDeparture: { select: { id: true, departureDate: true, recordedAt: true } },
+  roomDepartures: { where: { state: "SCHEDULED" }, select: { id: true, roomId: true, roomNumber: true, departureDate: true } },
 } satisfies Prisma.EntryInclude;
 
 type LoadedEntry = Prisma.EntryGetPayload<{ include: typeof ENTRY_INCLUDE }>;
@@ -214,7 +231,7 @@ function describeNights(ymds: string[]): string {
 export async function computeEarlyDepartureFigures(
   prisma: PrismaClient,
   entryId: string,
-  input: { departureDate?: string | null },
+  input: { departureDate?: string | null; roomIds?: string[] | null },
 ): Promise<EarlyDepartureFigures> {
   const entry = await loadEntry(prisma, entryId);
   const hotelToday = hotelTodayUtc();
@@ -223,9 +240,43 @@ export async function computeEarlyDepartureFigures(
   const parsedDeparture = input.departureDate ? new Date(input.departureDate) : null;
   if (parsedDeparture && Number.isNaN(parsedDeparture.getTime())) throw new ValidationError("departureDate must be a valid ISO date");
   const departure = parsedDeparture ? utcDateOnly(parsedDeparture) : hotelToday;
+  const later = departure.getTime() > hotelToday.getTime();
 
   const blockers: Array<{ code: string; message: string }> = [];
   const push = (code: string, message: string) => blockers.push({ code, message });
+
+  // Which rooms the stay still uses after the departure date, and whether the rooms named are all
+  // of them (the stay ends early) or some (the rest stay on) — 2026-11-26.
+  const rentRooms = new Set(
+    [...frozenCompositionByRoom([entry.reservation?.frozenCommercialTerms ?? null]).entries()].filter(([, c]) => !!c?.rent).map(([id]) => id),
+  );
+  const inUse = new Map<string, { roomId: string; roomNumber: string | null; roomTypeName: string | null; end: Date }>();
+  for (const a of entry.roomAssignments) {
+    const rs = a.startDate ?? checkIn;
+    const re = a.endDate ?? bookedCheckOut;
+    if (!rs || !re || re.getTime() <= rs.getTime() || re.getTime() <= departure.getTime()) continue;
+    const had = inUse.get(a.roomId);
+    if (!had || re.getTime() > had.end.getTime()) {
+      inUse.set(a.roomId, { roomId: a.roomId, roomNumber: a.room?.roomNumber ?? null, roomTypeName: a.room?.roomType?.name ?? null, end: re });
+    }
+  }
+  const named = Array.from(new Set((input.roomIds ?? []).map((x) => x.trim()).filter(Boolean)));
+  const scope: "BOOKING" | "ROOMS" = named.length > 0 && [...inUse.keys()].some((id) => !named.includes(id)) ? "ROOMS" : "BOOKING";
+  const chosen = new Set(scope === "ROOMS" ? named : [...inUse.keys()]);
+  if (scope === "ROOMS") {
+    const byId = new Map(entry.roomAssignments.map((a) => [a.roomId, a.room] as const));
+    for (const id of named) {
+      const room = byId.get(id);
+      const no = room?.roomNumber ?? id.slice(0, 6);
+      if (!room) push("ROOM_NOT_ON_BOOKING", "That room is not one of this booking's rooms");
+      else if (!inUse.has(id)) push("ROOM_NOT_IN_USE", `Room ${no} is not in use after ${describeNights([ymdUtc(departure)])} — nothing to shorten`);
+      else if (room.currentClaimState !== InventoryClaimState.OCCUPIED)
+        push("ROOM_NOT_OCCUPIED", `Room ${no} is not occupied by the guest now — a room leaves from a stay in it`);
+      if (rentRooms.has(id)) push("APARTMENT_ROOM", `Room ${no} is let as an apartment — an apartment leaves early as the whole booking`);
+      const scheduled = entry.roomDepartures.find((d) => d.roomId === id);
+      if (scheduled) push("ROOM_ALREADY_LEAVING", `Room ${no} is already recorded to leave on ${describeNights([ymdUtc(scheduled.departureDate)])} (${scheduled.id})`);
+    }
+  }
 
   if (entry.status !== EntryStatus.ACTIVE) push("ENTRY_NOT_ACTIVE", `The booking is ${entry.status}, not ACTIVE`);
   try {
@@ -242,7 +293,7 @@ export async function computeEarlyDepartureFigures(
   if (openExt) push("STAY_EXTENSION_OPEN", `A stay extension request is open (${openExt.id}, ${openExt.state}) — withdraw it first`);
   if (checkIn && bookedCheckOut) {
     try {
-      enforceEarlyDepartureDateWithinStay({ checkIn, bookedCheckOut, departure, hotelToday });
+      enforceEarlyDepartureDateWithinStay({ checkIn, bookedCheckOut, departure, hotelToday, allowLater: true });
     } catch (e) {
       if (e instanceof AppError) push("DEPARTURE_DATE", e.message);
       else throw e;
@@ -250,7 +301,9 @@ export async function computeEarlyDepartureFigures(
   }
 
   // --- Slept-night audits (SIG-S8 §1.2: complete for all nights already stayed) ---------------
-  const sleptYmds = checkIn ? listNightYmdsUtc(checkIn, departure) : [];
+  // Only nights that have ended are asked for: a departure on a later day leaves tonight and the
+  // nights before it to the night audit as usual (2026-11-26).
+  const sleptYmds = checkIn ? listNightYmdsUtc(checkIn, departure).filter((ymd) => ymd < ymdUtc(hotelToday)) : [];
   const sleptNightAudits: Array<{ date: string; status: string }> = [];
   const missingNightYmds: string[] = [];
   for (const ymd of sleptYmds) {
@@ -286,7 +339,7 @@ export async function computeEarlyDepartureFigures(
     const sleptEnd = departure.getTime() < rowEnd.getTime() ? departure : rowEnd;
     const sleptNights = Math.max(0, Math.min(totalNights, nightsBetweenUtc(rowStart, sleptEnd)));
     const unstayedNights = totalNights - sleptNights;
-    const shortened = rowEnd.getTime() > departure.getTime() && totalNights > 0;
+    const shortened = rowEnd.getTime() > departure.getTime() && totalNights > 0 && chosen.has(a.roomId);
     const legacyFlatRate = a.frozenSubtotal == null;
     let perNightSubtotal: Prisma.Decimal;
     let perNightRoomSubtotal: Prisma.Decimal;
@@ -373,13 +426,28 @@ export async function computeEarlyDepartureFigures(
       legacyFlatRate,
       shortened,
       rentCorrections: shortened ? rentFix : [],
+      feeAmount: null,
     });
   }
 
-  const bookedNights = checkIn && bookedCheckOut ? nightsBetweenUtc(checkIn, bookedCheckOut) : 0;
-  const sleptNightsTotal = checkIn ? Math.min(bookedNights, nightsBetweenUtc(checkIn, departure)) : 0;
-  const unstayedNightsTotal = Math.max(0, bookedNights - sleptNightsTotal);
-  const unstayedYmds = bookedCheckOut && departure.getTime() < bookedCheckOut.getTime() ? listNightYmdsUtc(departure, bookedCheckOut) : [];
+  const shortRows = rooms.filter((r) => r.shortened);
+  const roomsEnd = scope === "ROOMS" && shortRows.length ? new Date(`${shortRows.map((r) => r.endDate).sort().at(-1)}T00:00:00.000Z`) : bookedCheckOut;
+  const bookedNights =
+    scope === "ROOMS"
+      ? Math.max(0, ...shortRows.map((r) => r.totalNights))
+      : checkIn && bookedCheckOut
+        ? nightsBetweenUtc(checkIn, bookedCheckOut)
+        : 0;
+  const sleptNightsTotal =
+    scope === "ROOMS"
+      ? shortRows.length
+        ? Math.min(...shortRows.map((r) => r.sleptNights))
+        : 0
+      : checkIn
+        ? Math.min(bookedNights, nightsBetweenUtc(checkIn, departure))
+        : 0;
+  const unstayedNightsTotal = scope === "ROOMS" ? Math.max(0, ...shortRows.map((r) => r.unstayedNights)) : Math.max(0, bookedNights - sleptNightsTotal);
+  const unstayedYmds = roomsEnd && departure.getTime() < roomsEnd.getTime() ? listNightYmdsUtc(departure, roomsEnd) : [];
 
   // --- Fee (Policy 36 configurable: penalty terms per rate plan) ------------------------------
   const cfg = await requireActiveConfigValue<unknown>(prisma, "earlyDeparture.penalty");
@@ -432,6 +500,20 @@ export async function computeEarlyDepartureFigures(
   } else {
     explanation = "The early-departure rule is NONE — nothing is charged for the unstayed nights.";
   }
+  // Each room's own fee by the same rule (2026-11-26): what a room leaving early, the rest staying,
+  // is charged. A flat fee is one per room that leaves. When some rooms leave, the fee IS the sum.
+  for (const r of rooms) {
+    if (!r.shortened || r.unstayedNights <= 0) continue;
+    let f = new Prisma.Decimal(0);
+    if (rule.basis === "FLAT_AMOUNT") f = round2(toDecimal(rule.amount));
+    else if (rule.basis === "PERCENT_OF_UNSTAYED") f = round2(new Prisma.Decimal(r.perNightRoomSubtotal).mul(r.unstayedNights).mul(pct));
+    else if (rule.basis === "UNSTAYED_NIGHTS") f = round2(new Prisma.Decimal(r.perNightRoomSubtotal).mul(Math.min(rule.nights, r.unstayedNights)).mul(pct));
+    r.feeAmount = money(f);
+  }
+  if (scope === "ROOMS") {
+    feeAmount = rooms.reduce((t, r) => t.plus(r.feeAmount ?? 0), new Prisma.Decimal(0));
+    if (rule.basis === "FLAT_AMOUNT") explanation = `A flat early-departure fee of ${round2(toDecimal(rule.amount)).toFixed(2)} (net) for each room that leaves.`;
+  }
   const gross = round2(feeAmount.mul(taxFactor));
   const bookedToWords = bookedCheckOut ? describeNights([ymdUtc(bookedCheckOut)]) : null;
   const span = [describeNights(unstayedYmds), bookedToWords ? `booked to ${bookedToWords}` : null].filter(Boolean).join("; ");
@@ -439,6 +521,19 @@ export async function computeEarlyDepartureFigures(
 
   return {
     entryId,
+    scope,
+    roomIds: scope === "ROOMS" ? named : [],
+    roomsInUse: [...inUse.values()]
+      .sort((a, b) => (a.roomNumber ?? "").localeCompare(b.roomNumber ?? "", undefined, { numeric: true }))
+      .map((r) => ({
+        roomId: r.roomId,
+        roomNumber: r.roomNumber,
+        roomTypeName: r.roomTypeName,
+        endDate: ymdUtc(r.end),
+        nightsLeft: nightsBetweenUtc(departure.getTime() > hotelToday.getTime() ? departure : hotelToday, r.end),
+        apartment: rentRooms.has(r.roomId),
+      })),
+    later,
     hotelToday: ymdUtc(hotelToday),
     checkIn: checkIn ? ymdUtc(checkIn) : null,
     bookedCheckOut: bookedCheckOut ? ymdUtc(bookedCheckOut) : null,
@@ -473,7 +568,7 @@ export async function computeEarlyDepartureFigures(
   };
 }
 
-export async function previewEarlyDeparture(prisma: PrismaClient, entryId: string, input: { departureDate?: string | null }) {
+export async function previewEarlyDeparture(prisma: PrismaClient, entryId: string, input: { departureDate?: string | null; roomIds?: string[] | null }) {
   return computeEarlyDepartureFigures(prisma, entryId, input);
 }
 
@@ -497,6 +592,8 @@ export interface EarlyDepartureOutcome {
   rentErrors: string[];
   movedToCheckout: boolean;
   checkoutBlocked: { code: string; message: string } | null;
+  /** The guest leaves on a later day: the stay is shortened now, and checks out then as usual. */
+  later: boolean;
   entry: Awaited<ReturnType<typeof loadEntryDetail>>;
 }
 
@@ -516,6 +613,7 @@ export async function recordEarlyDeparture(
   await requireActiveMode(prisma, "EARLY_DEPARTURE");
 
   const figures = await computeEarlyDepartureFigures(prisma, entryId, { departureDate: input.departureDate ?? null });
+  if (figures.scope !== "BOOKING") throw new ValidationError("Some rooms leaving is recorded for those rooms — not as the whole booking");
   // The same checks the preview REPORTS are GATES here — the first one names the refusal.
   const hardBlocker = figures.blockers.find((b) => b.code !== "NIGHT_AUDITS_INCOMPLETE");
   if (hardBlocker) {
@@ -728,7 +826,8 @@ export async function recordEarlyDeparture(
         description: figures.fee.description,
         amount: feeAmount,
         currency: "BTN",
-        chargeDate: `${figures.departureDate}T00:00:00.000Z`,
+        // A charge is never dated ahead of today: a departure on a later day posts its fee today.
+        chargeDate: `${figures.later ? figures.hotelToday : figures.departureDate}T00:00:00.000Z`,
         allowSoftGateBypass: true,
         billingModelOverride: stayPayer,
       });
@@ -759,8 +858,9 @@ export async function recordEarlyDeparture(
   }
 
   // Tonight, if it was posted ahead (at check-in, or by the desk), is no longer a night of the stay —
-  // its lines go to zero before the move to Check-out (2026-10-29).
-  {
+  // its lines go to zero before the move to Check-out (2026-10-29). On a later departure tonight is
+  // still slept, and the booking stays at Stay until that day's check-out (2026-11-26).
+  if (!figures.later) {
     const { reconcileTonightBestEffort } = await import("../application/s7-night-audit-service.js");
     await reconcileTonightBestEffort(prisma, {
       entryId,
@@ -773,7 +873,7 @@ export async function recordEarlyDeparture(
   // --- Compression into S8 (SIG-S8 §1.2: "Early Departure mode compresses S7→S8") -------------
   let movedToCheckout = false;
   let checkoutBlocked: { code: string; message: string } | null = null;
-  try {
+  if (!figures.later) try {
     const fresh = await prisma.entry.findUnique({ where: { id: entryId }, select: { version: true } });
     await progressStageS7ToS8(prisma, entryId, actor.actorId, fresh?.version);
     movedToCheckout = true;
@@ -803,6 +903,7 @@ export async function recordEarlyDeparture(
     rentErrors,
     movedToCheckout,
     checkoutBlocked,
+    later: figures.later,
     entry: await loadEntryDetail(prisma, entryId),
   };
 }

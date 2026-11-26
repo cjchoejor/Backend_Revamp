@@ -74,6 +74,19 @@ export interface EntryBillingSummary {
       feeAmount: number;
       feeWaived: boolean;
     } | null;
+    /**
+     * Rooms leaving early while the rest stay (2026-11-26): `amount` above is already less each
+     * room's nights not slept (its frozen room total for them), as for the whole booking.
+     */
+    roomsLeaving: Array<{
+      roomNumber: string;
+      departureDate: string;
+      unstayedNights: number;
+      forgoneTotal: number;
+      feeAmount: number;
+      feeWaived: boolean;
+      state: string;
+    }>;
   };
   /**
    * Per-room price breakdown (2026-08-13, operator request) — read from the basis quotation's
@@ -236,6 +249,10 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
           feeAmount: true,
           feeWaived: true,
         },
+      },
+      roomDepartures: {
+        orderBy: { recordedAt: "asc" },
+        select: { roomNumber: true, departureDate: true, unstayedNights: true, forgoneTotal: true, feeAmount: true, feeWaived: true, state: true },
       },
     },
   });
@@ -657,6 +674,22 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     };
   }
 
+  // Rooms leaving early, the rest staying (2026-11-26): each room's nights not slept come off too.
+  const roomsLeaving = (entry.roomDepartures ?? []).map((d) => ({
+    roomNumber: d.roomNumber,
+    departureDate: d.departureDate.toISOString().slice(0, 10),
+    unstayedNights: d.unstayedNights,
+    forgoneTotal: money(toDecimal(d.forgoneTotal)) ?? 0,
+    feeAmount: money(toDecimal(d.feeAmount)) ?? 0,
+    feeWaived: d.feeWaived,
+    state: d.state,
+  }));
+  if (stayTotalDec != null && roomsLeaving.length) {
+    const less = (entry.roomDepartures ?? []).reduce((t, d) => t.plus(toDecimal(d.forgoneTotal)), new Prisma.Decimal(0));
+    const shortened = stayTotalDec.minus(less);
+    stayTotalDec = shortened.lessThan(0) ? new Prisma.Decimal(0) : shortened;
+  }
+
   const stayTotal = money(stayTotalDec);
   // Once the guest has left (Check-out, Closed) the headline is the bill as it stands
   // (2026-09-18). The stay total is the room-night contract: after an early departure it shrinks
@@ -690,6 +723,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       nights: earlyDepartureBlock ? earlyDepartureBlock.sleptNights : nights,
       perNightAmount,
       earlyDeparture: earlyDepartureBlock,
+      roomsLeaving,
     },
     rooms,
     folio: folioBlock,

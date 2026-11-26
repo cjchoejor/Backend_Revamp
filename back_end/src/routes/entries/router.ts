@@ -76,7 +76,9 @@ import { buildSegmentHistory } from "../../services/domain/segment-history-servi
 import { recallSegmentConfiguration, duplicateSegmentIntoNew } from "../../services/domain/segment-recall-service.js";
 import { listEntryCommunications } from "../../services/domain/communication-acknowledgement-service.js";
 import { buildEntryRateReference } from "../../services/domain/rate-reference-service.js";
-import { previewEarlyDeparture, recordEarlyDeparture } from "../../services/domain/early-departure-service.js";
+import { previewEarlyDeparture } from "../../services/domain/early-departure-service.js";
+import { listRoomDepartures, recordLeavingEarly, releaseScheduledRoomDeparture } from "../../services/domain/rooms-leaving-early-service.js";
+import { addRoomToStay, previewAddRoom } from "../../services/domain/add-room-to-stay-service.js";
 import { buildQuotationPreview, buildTripQuotationPreview } from "../../services/domain/quotation-preview-service.js";
 import { buildCompetingClaims } from "../../services/domain/competing-claims-service.js";
 import { changeRoomToNewSegment, listRoomChangeCandidates, buildRoomPlanHistory } from "../../services/domain/room-change-service.js";
@@ -91,6 +93,9 @@ import {
   stayExtensionNowRequestSchema,
   earlyDeparturePreviewRequestSchema,
   earlyDepartureRequestSchema,
+  roomDepartureReleaseRequestSchema,
+  addRoomPreviewRequestSchema,
+  addRoomRequestSchema,
 } from "../../dtos/06-reservations/request-schemas.js";
 import {
   commitStayExtension,
@@ -448,7 +453,7 @@ entriesRouter.post("/:id/room-change", requireActorLevel("L1"), validateBody(roo
 entriesRouter.post("/:id/early-departure/preview", requireActorLevel("L1"), validateBody(earlyDeparturePreviewRequestSchema), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await previewEarlyDeparture(prisma, req.params.id, { departureDate: req.body.departureDate ?? null }));
+    res.json(await previewEarlyDeparture(prisma, req.params.id, { departureDate: req.body.departureDate ?? null, roomIds: req.body.roomIds ?? null }));
   } catch (e) {
     next(e);
   }
@@ -457,14 +462,66 @@ entriesRouter.post("/:id/early-departure/preview", requireActorLevel("L1"), vali
 entriesRouter.post("/:id/early-departure", requireActorLevel("L3"), validateBody(earlyDepartureRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    // The whole booking, or some rooms (2026-11-26) — whichever the rooms named come to.
     res.json(
-      await recordEarlyDeparture(prisma, actor, req.params.id, {
+      await recordLeavingEarly(prisma, actor, req.params.id, {
         departureDate: req.body.departureDate ?? null,
+        roomIds: req.body.roomIds ?? null,
+        billing: req.body.billing ?? null,
         reason: req.body.reason,
         waiveFee: req.body.waiveFee === true,
         waiveReason: req.body.waiveReason ?? null,
       }),
     );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Rooms recorded to leave early while the rest stay (2026-11-26). */
+entriesRouter.get("/:id/room-departures", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json({ items: await listRoomDepartures(prisma, req.params.id) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** A room added to a stay in house — the rooms free and their rates (2026-11-26). */
+entriesRouter.post("/:id/add-room/preview", requireActorLevel("L1"), validateBody(addRoomPreviewRequestSchema), async (req, res, next) => {
+  try {
+    res.setHeader("Cache-Control", "no-store");
+    res.json(await previewAddRoom(prisma, req.params.id, { startDate: req.body.startDate ?? null }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** A room added to a stay in house, as a stay of its own on the enquiry — the GM's or an admin's. */
+entriesRouter.post("/:id/add-room", requireActorLevel("L3"), validateBody(addRoomRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(
+      await addRoomToStay(prisma, actor, req.params.id, {
+        roomId: req.body.roomId,
+        startDate: req.body.startDate ?? null,
+        adults: req.body.adults,
+        childAges: req.body.childAges ?? [],
+        mealPlan: req.body.mealPlan,
+        reason: req.body.reason,
+      }),
+    );
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** A room recorded to leave on a later day, released on its day — the desk's act. */
+entriesRouter.post("/:id/room-departures/:recordId/release", requireActorLevel("L1"), validateBody(roomDepartureReleaseRequestSchema), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await releaseScheduledRoomDeparture(prisma, actor, req.params.id, req.params.recordId, { keyReturned: req.body.keyReturned === true }));
   } catch (e) {
     next(e);
   }
