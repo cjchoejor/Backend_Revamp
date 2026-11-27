@@ -312,15 +312,36 @@ export const roomRemovalDecideRequestSchema = z.object({
   decision: z.enum(["APPROVE", "REJECT"]),
   note: z.string().trim().max(500).optional().nullable(),
 });
-/** Rooms added to the booking on its check-in day (2026-11-26) — the new guests and their table. */
-export const addRoomPreviewRequestSchema = z.object({}).passthrough();
-export const addRoomRequestSchema = z.object({
+/**
+ * Rooms added to a stay in house (2026-11-26 / 2026-11-27): when the new guests come and go, then each
+ * group of rooms leaving on one day with its guests and its table. The older single form (the rooms with
+ * the group's dates) is still taken.
+ */
+const ymd = z.string().trim().regex(/^\d{4}-\d{2}-\d{2}$/, "a date");
+export const addRoomPreviewRequestSchema = z.object({ arrive: ymd.optional().nullable(), leave: ymd.optional().nullable() }).passthrough();
+const addRoomStaySchema = z.object({
+  checkOut: ymd.optional().nullable(),
   roomIds: z.array(z.string().trim().min(1).max(64)).min(1).max(20),
   adults: z.number().int().min(0).max(60),
   childAges: z.array(z.number().int().min(0).max(17)).max(30).default([]),
   roomCompositions: z.array(roomCompositionInputSchema).min(1).max(20),
-  reason: z.string().trim().max(500).optional().nullable(),
+  guest: z
+    .object({ title: z.string().trim().max(20).optional().nullable(), name: z.string().trim().min(1).max(120), phone: z.string().trim().max(40).optional().nullable() })
+    .optional()
+    .nullable(),
 });
+export const addRoomRequestSchema = z
+  .object({
+    arrive: ymd.optional().nullable(),
+    hereNow: z.boolean().optional(),
+    stays: z.array(addRoomStaySchema).min(1).max(10).optional(),
+    roomIds: z.array(z.string().trim().min(1).max(64)).min(1).max(20).optional(),
+    adults: z.number().int().min(0).max(60).optional(),
+    childAges: z.array(z.number().int().min(0).max(17)).max(30).optional(),
+    roomCompositions: z.array(roomCompositionInputSchema).min(1).max(20).optional(),
+    reason: z.string().trim().max(500).optional().nullable(),
+  })
+  .refine((v) => !!v.stays?.length || (!!v.roomIds?.length && !!v.roomCompositions?.length), { message: "Name the rooms to add", path: ["stays"] });
 /** Guest rows the add-room flow wrote and the desk then left (2026-11-26). */
 export const addRoomDiscardGuestsRequestSchema = z.object({ subjectKeys: z.array(z.string().trim().min(2).max(8)).min(1).max(60) });
 /** A room recorded to leave on a later day, released on the day (2026-11-26). */

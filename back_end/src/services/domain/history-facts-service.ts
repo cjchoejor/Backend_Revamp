@@ -370,6 +370,38 @@ export async function buildHistoryFacts(
         ]);
         break;
       }
+      // Rooms added as bookings of their own on the same enquiry (2026-11-27).
+      case "ENTRY.ROOMS_ADDED_AS_BOOKINGS": {
+        const list = Array.isArray(p.bookings)
+          ? (p.bookings as Array<{ entryId?: string | null; roomNumbers?: string[]; checkIn?: string; checkOut?: string; guestName?: string | null; failed?: string | null }>)
+          : [];
+        put(ev.id, [
+          ...list.map((b) =>
+            b.failed
+              ? `Not made: ${b.failed}`
+              : `${(b.roomNumbers ?? []).length > 1 ? "Rooms" : "Room"} ${(b.roomNumbers ?? []).join(", ")} for ${b.guestName ?? "a guest"} · ${day(b.checkIn) ?? b.checkIn} → ${day(b.checkOut) ?? b.checkOut} · ${b.entryId ?? ""}`,
+          ),
+          typeof p.discountCarried === "number" ? `The group's ${p.discountCarried}% off carried` : null,
+          p.hereNow === true ? "The guests were at the desk — taken to Check-in" : null,
+          typeof p.reason === "string" && p.reason ? `Note: ${p.reason}` : null,
+        ]);
+        break;
+      }
+      case "ENTRY.CREATED_AS_ADDED_ROOM": {
+        const nos = Array.isArray(p.roomNumbers) ? (p.roomNumbers as string[]) : [];
+        const g = (p.guests ?? {}) as { adults?: number; childAges?: number[] };
+        const blocked = p.blocked as { atStep?: string; message?: string } | null;
+        put(ev.id, [
+          typeof p.addedTo === "string" ? `Added to the group's booking ${p.addedTo}` : null,
+          nos.length ? `${nos.length > 1 ? "Rooms" : "Room"} ${nos.join(", ")} · ${day(p.checkIn) ?? p.checkIn} → ${day(p.checkOut) ?? p.checkOut}` : null,
+          typeof p.guestName === "string" ? `For ${p.guestName}` : null,
+          typeof g.adults === "number"
+            ? `${g.adults} adult${g.adults === 1 ? "" : "s"}${g.childAges?.length ? `, ${g.childAges.length === 1 ? "a child" : "children"} aged ${g.childAges.join(", ")}` : ""}`
+            : null,
+          blocked?.message ? `Stopped at ${String(blocked.atStep ?? "").toLowerCase().replace(/_/g, " ")}: ${blocked.message}` : null,
+        ]);
+        break;
+      }
       case "ENTRY.ROOMS_REMOVED":
       case "ENTRY.ROOMS_LEAVING_EARLY": {
         const rooms = Array.isArray(p.rooms) ? (p.rooms as Array<{ roomNumber?: string; unstayedNights?: number; forgoneTotal?: unknown; feeAmount?: unknown }>) : [];

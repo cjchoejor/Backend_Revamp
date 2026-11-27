@@ -123,7 +123,16 @@ export async function updateEntryCaller(prisma: PrismaClient, actor: Actor, entr
  * a bug where who is arriving is still named the caller … check if travel agent case as well"). On an
  * agency's or a company's booking its own person, who stood there until now, moves to the enquiry.
  */
-type GuestNamingOptions = { keepNewName?: boolean; arrivingIsGuest?: boolean };
+type GuestNamingOptions = {
+  keepNewName?: boolean;
+  arrivingIsGuest?: boolean;
+  /**
+   * Internal, never from the network (the route's fields are a fixed list): the enquiry keeps the guest
+   * it names. A room added for friends of the group is a booking in the friend's name; the group's
+   * enquiry stays the group's (2026-11-27).
+   */
+  keepInquiryGuest?: boolean;
+};
 
 export type SetGuestInput =
   | ({ mode: "CALLER"; nationality?: string | null } & GuestNamingOptions)
@@ -322,7 +331,7 @@ export async function setEntryGuest(prisma: PrismaClient, actor: Actor, entryId:
     }
     // The enquiry carries the guest too. It follows this booking when it had none, or when it was
     // this booking's earlier guest — a return stay on the same enquiry keeps whatever it names.
-    const followInquiry = !inq.guestProfileId || inq.guestProfileId === entry.guestProfileId || inq._count.entries === 1;
+    const followInquiry = !input.keepInquiryGuest && (!inq.guestProfileId || inq.guestProfileId === entry.guestProfileId || inq._count.entries === 1);
     if (followInquiry) await tx.inquiry.update({ where: { id: inq.id }, data: { guestProfileId } });
 
     let duplicate: { conflictingInquiryId: string; conflictingEntryId: string; why: string } | null = null;

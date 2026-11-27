@@ -534,22 +534,28 @@ entriesRouter.get("/:id/room-departures", requireActorLevel("L1"), async (req, r
   }
 });
 
-/** Rooms added to the booking on its check-in day (2026-11-26): the house over the stay, the party, who may. */
+/** Rooms added to a stay in house: the house over the new guests' nights, the party, who may (2026-11-27). */
 entriesRouter.post("/:id/add-room/preview", requireActorLevel("L1"), validateBody(addRoomPreviewRequestSchema), async (req, res, next) => {
   try {
     res.setHeader("Cache-Control", "no-store");
-    res.json(await previewAddRoom(prisma, req.params.id, req.actor!.level));
+    res.json(await previewAddRoom(prisma, req.params.id, req.actor!.level, { arrive: req.body.arrive ?? null, leave: req.body.leave ?? null }));
   } catch (e) {
     next(e);
   }
 });
 
-/** The rooms join the booking for the whole stay, priced on the desk's table — whoever the admin console lets. */
+/**
+ * Rooms added to a stay in house — whoever the admin console lets. Rooms with the group's dates on its
+ * check-in day join the booking; the rest are bookings of their own on the same enquiry (2026-11-27).
+ */
 entriesRouter.post("/:id/add-room", requireActorLevel("L1"), validateBody(addRoomRequestSchema), async (req, res, next) => {
   try {
     const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
     res.json(
       await addRoomsToStay(prisma, actor, req.params.id, {
+        arrive: req.body.arrive ?? null,
+        hereNow: req.body.hereNow === true,
+        stays: req.body.stays,
         roomIds: req.body.roomIds,
         adults: req.body.adults,
         childAges: req.body.childAges ?? [],
