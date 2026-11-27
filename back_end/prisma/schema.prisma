@@ -1231,6 +1231,9 @@ model Entry {
   apartmentPlan           String?
   /// How many apartments the guest asked for (2026-11-25); an apartment stay only. A 2 BHK is one.
   apartmentCount          Int?
+  /// What this booking's apartments hold, with counts, never priced (2026-11-27):
+  /// [{ unitId, label, items: [{ name, count }] }]. Absent for an apartment: its package's list.
+  apartmentAmenities      Json?
 
   /// A booking split off another (2026-10-14, operator: "move one room to other dates ... as a
   /// different entry under the same inquiry, or a new inquiry"): the booking its rooms came from.
@@ -1300,6 +1303,7 @@ model Entry {
   earlyDeparture               EarlyDepartureRecord?
   roomDepartures               RoomDepartureRecord[]
   roomRemovalRequests          RoomRemovalRequest[]
+  apartmentExtraBeds           ApartmentExtraBed[]
   writeOffRecords              WriteOffRecord[]
   followUpTasks                FollowUpTaskRecord[]
   communications               CommunicationRecord[]
@@ -1664,6 +1668,7 @@ model Room {
   payments                  PaymentRecord[]
   advanceApplications       AdvanceApplication[]
   roomMoveLegsFrom          RoomMoveLeg[]              @relation("RoomMoveLegFrom")
+  apartmentExtraBeds        ApartmentExtraBed[]
   roomMoveLegsTo            RoomMoveLeg[]              @relation("RoomMoveLegTo")
   apartmentUnitRoom         ApartmentUnitRoom?
 
@@ -3903,6 +3908,9 @@ model ApartmentPackage {
   monthlyRateTyped  Decimal? @db.Decimal(12, 2)
   sortOrder         Int      @default(0)
   isActive          Boolean  @default(true)
+  /// What each of its apartments usually has, with counts, never priced (2026-11-27) —
+  /// [{ name, count }]. A booking starts from it and keeps its own list.
+  amenityKit        Json?
   createdAt         DateTime @default(now())
   createdBy         String
   updatedAt         DateTime @updatedAt
@@ -3941,6 +3949,34 @@ model ApartmentUnitRoom {
 
   @@index([unitId])
   @@map("apartment_unit_rooms")
+}
+
+/// An extra bed asked for during an apartment stay (2026-11-27, operator: "they can ask extra bed during
+/// stay, so somewhere in stay we need an option to add bed for how many days and charge it"). Charged
+/// night by night by the night audit at `ratePerBed` (the apartments' extra bed rate when it was
+/// added, without taxes), on the apartment's first room, from `fromDate` to the morning of `toDate`.
+model ApartmentExtraBed {
+  id         String    @id @default(uuid())
+  entryId    String
+  unitId     String
+  unitLabel  String
+  roomId     String
+  beds       Int
+  fromDate   DateTime
+  toDate     DateTime
+  ratePerBed Decimal   @db.Decimal(12, 2)
+  note       String?
+  createdAt  DateTime  @default(now())
+  createdBy  String
+  endedAt    DateTime?
+  endedBy    String?
+  endReason  String?
+
+  entry Entry @relation(fields: [entryId], references: [id], onDelete: Restrict, onUpdate: Cascade)
+  room  Room  @relation(fields: [roomId], references: [id], onUpdate: Cascade)
+
+  @@index([entryId])
+  @@map("apartment_extra_beds")
 }
 
 /// Part of the advance, put against ONE room or space (2026-09-11, operator request).

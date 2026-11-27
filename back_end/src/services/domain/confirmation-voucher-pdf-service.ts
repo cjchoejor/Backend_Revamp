@@ -16,6 +16,7 @@
  * If a voucher was previously rendered we serve the stored file rather than regenerating.
  */
 import { cancellationWordsForTerms } from "../../lib/cancellation-policy.js";
+import { amenitiesForPaper } from "./apartment-extras-service.js";
 import { waitingRefundTotal } from "../../lib/refund-money.js";
 import { computeStayCharges, stayBreakdownFromTerms } from "../infrastructure/compute-stay-charges.js";
 import { maxZeroSub, sumMoneyBy } from "../../lib/money.js";
@@ -361,6 +362,7 @@ export async function generateOrLoadConfirmationVoucherPdf(
     // The rooms as the quotation sets them out, no prices (2026-11-07).
     lines: paper?.priceBlock.lines,
     datesShown: paper?.priceBlock.datesShown,
+    amenities: await amenitiesForPaper(prisma, entry.id),
     closingNote:
       `Inclusions per plan · Wi-Fi · parking. Early check-in and late check-out subject to ` +
       `availability. Please carry photo ID for all adult guests. Cancellation: ${cancellationWords.join(" ")}`,

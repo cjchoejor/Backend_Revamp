@@ -311,7 +311,10 @@ async function compose(prisma: PrismaClient, entryId: string, opts?: { nightsMod
     account: parties.billedTo,
     forGuest: parties.forGuest,
     stay,
-    rooms: roomNumbersOf(entry),
+    // An apartment booking names its apartments, not their rooms (2026-11-27).
+    rooms: assigned.some((a) => a.name.startsWith("Apartment "))
+      ? assigned.map((a) => a.name).filter((n) => n.startsWith("Apartment "))
+      : roomNumbersOf(entry),
     sealedAt: folioSealedAt(entry.folio),
     asAt: new Date(),
   };

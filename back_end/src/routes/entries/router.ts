@@ -116,6 +116,14 @@ import { resolveNoShowGraceMinutes, timerShowsFrom } from "../../lib/expected-ar
 import { buildEntryBedPlan, setEntryBedPlanRoom } from "../../services/domain/entry-bed-plan-service.js";
 import { readRoomsReleasedByBooking } from "../../lib/rooms-released-by-booking.js";
 import { describeApartmentsForEntry, pickApartmentsForEntry } from "../../services/domain/apartment-booking-service.js";
+import {
+  addApartmentExtraBed,
+  endApartmentExtraBed,
+  getEntryApartmentAmenities,
+  listApartmentExtraBeds,
+  previewApartmentExtraBed,
+  setEntryApartmentAmenities,
+} from "../../services/domain/apartment-extras-service.js";
 
 export const entriesRouter = Router();
 
@@ -331,6 +339,75 @@ entriesRouter.post("/:id/apartments/pick", requireActorLevel("L1"), async (req, 
     const out = await pickApartmentsForEntry(prisma, req.params.id, actor, { unitIds });
     await afterStayChanged(prisma, actor, req.params.id, "ROOMS");
     res.json(out);
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** What the booking's apartments hold, with counts, never priced (2026-11-27). L1. */
+entriesRouter.get("/:id/apartment-amenities", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await getEntryApartmentAmenities(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Keep what one or more of the booking's apartments hold. Any live step; L1; traced before and after. */
+entriesRouter.put("/:id/apartment-amenities", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const units = Array.isArray(req.body?.units)
+      ? req.body.units.slice(0, 20).map((u: { unitId?: unknown; items?: unknown }) => ({ unitId: String(u?.unitId ?? ""), items: u?.items }))
+      : [];
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    res.json(await setEntryApartmentAmenities(prisma, req.params.id, actor, { units }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** An apartment stay's extra beds, what they come to, and whether one can be added now (2026-11-27). L1. */
+entriesRouter.get("/:id/apartment-extra-beds", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await listApartmentExtraBeds(prisma, req.params.id));
+  } catch (e) {
+    next(e);
+  }
+});
+
+const bedAskOf = (b: Record<string, unknown> | undefined) => ({
+  unitId: String(b?.unitId ?? ""),
+  beds: Number(b?.beds),
+  fromDate: String(b?.fromDate ?? ""),
+  toDate: String(b?.toDate ?? ""),
+});
+
+/** What an extra bed would come to — nothing written. L1. */
+entriesRouter.post("/:id/apartment-extra-beds/preview", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await previewApartmentExtraBed(prisma, req.params.id, bedAskOf(req.body)));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** Add an extra bed to an apartment at Stay; the night audit charges it night by night. L1. */
+entriesRouter.post("/:id/apartment-extra-beds", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const note = typeof req.body?.note === "string" ? req.body.note.slice(0, 300) : null;
+    res.status(201).json(await addApartmentExtraBed(prisma, req.params.id, actor, { ...bedAskOf(req.body), note }));
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** End an extra bed: it goes back the morning given (today at the earliest). L1. */
+entriesRouter.post("/:id/apartment-extra-beds/:recordId/end", requireActorLevel("L1"), async (req, res, next) => {
+  try {
+    const actor = { actorId: req.actor!.actorId, actorLevel: req.actor!.level as "L1" | "L2" | "L3" | "L4" };
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 300) : null;
+    res.json(await endApartmentExtraBed(prisma, req.params.id, req.params.recordId, actor, { toDate: String(req.body?.toDate ?? ""), reason }));
   } catch (e) {
     next(e);
   }

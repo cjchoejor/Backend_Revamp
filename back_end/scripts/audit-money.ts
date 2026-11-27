@@ -697,6 +697,44 @@ async function main() {
     }
   }
 
+  // A20 (2026-11-27): an apartment's extra bed is charged by the night audit from its record — each
+  // line on a night the record covers, once, at the record's rate × beds. A line whose record is gone
+  // (taken off the night it started) or whose night the record no longer covers (ended that night)
+  // must have been put right to nothing.
+  const bedLines = await prisma.folioLine.findMany({
+    where: { description: { startsWith: "Night audit apartment extra bed" } },
+    select: { id: true, folioId: true, amount: true, chargeDate: true, description: true, folio: { select: { entryId: true } } },
+  });
+  if (bedLines.length) {
+    const beds = await prisma.apartmentExtraBed.findMany({ select: { id: true, entryId: true, beds: true, ratePerBed: true, fromDate: true, toDate: true } });
+    const corrections = await prisma.folioLine.findMany({
+      where: { OR: bedLines.map((l) => ({ description: { startsWith: `Correction for ${l.id}:` } })) },
+      select: { description: true, amount: true },
+    });
+    const correctedBy = new Map<string, Prisma.Decimal>();
+    for (const c of corrections) {
+      const id = c.description.slice("Correction for ".length).split(":")[0];
+      correctedBy.set(id, (correctedBy.get(id) ?? D(0)).add(D(c.amount)));
+    }
+    const seen = new Set<string>();
+    for (const l of bedLines) {
+      const tail = l.description.split(" · ").pop() ?? "";
+      const rec = beds.find((b) => b.entryId === l.folio?.entryId && b.id.startsWith(tail));
+      const net = D(l.amount).add(correctedBy.get(l.id) ?? D(0));
+      const night = l.chargeDate?.getTime() ?? 0;
+      const covered = !!rec && rec.fromDate.getTime() <= night && night < rec.toDate.getTime();
+      if (!covered) {
+        if (!net.eq(0)) add("CRITICAL", "A20_APARTMENT_BED", l.id, `a bed line of ${money(net)} on a night no extra bed record covers`);
+        continue;
+      }
+      const key = `${rec!.id}|${night}`;
+      if (seen.has(key)) add("CRITICAL", "A20_APARTMENT_BED", l.id, `the bed of ${rec!.id.slice(0, 8)} charged twice on ${l.chargeDate?.toISOString().slice(0, 10)}`);
+      seen.add(key);
+      const want = round2(D(rec!.ratePerBed).mul(rec!.beds));
+      if (!D(l.amount).eq(want)) add("CRITICAL", "A20_APARTMENT_BED", l.id, `${money(D(l.amount))} posted for ${rec!.beds} bed(s) at ${money(D(rec!.ratePerBed))} — ${money(want)} expected`);
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

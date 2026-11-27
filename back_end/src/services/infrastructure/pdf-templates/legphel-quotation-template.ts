@@ -21,6 +21,7 @@ import {
   row,
   section,
   stayRows,
+  subheading,
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
@@ -128,6 +129,8 @@ export type LegphelQuotationInput = LegphelPriceBlock & {
   attn?: string | null;
   /** Check-in "20 Oct 2026" · Check-out "22 Oct 2026 · 2 nights" (2026-10-28). */
   stay: StayLines | null;
+  /** What each apartment holds, never priced (2026-11-27) — "Rice pot 1 · Curry pot 1". */
+  amenities?: ApartmentAmenityLine[] | null;
   closingNote: string;
   /** Tariff version for the footer, e.g. "T1.0". */
   tariffVersion: string;
@@ -193,6 +196,16 @@ export function renderPriceBlock(input: LegphelPriceBlock): string[] {
   ];
 }
 
+export type ApartmentAmenityLine = { label: string; words: string };
+
+/** What the apartment holds, for the guest to read (2026-11-27): one line, or one per apartment. */
+export function renderApartmentAmenities(list: ApartmentAmenityLine[] | null | undefined): string {
+  if (!list?.length) return "";
+  // A block that wraps: a full list does not fit a row's one line.
+  if (list.length === 1) return [subheading("In the apartment"), note(list[0].words, "grey")].join("\n");
+  return [subheading("In the apartments"), ...list.map((a) => note(`Apartment ${a.label}: ${a.words}`, "grey"))].join("\n");
+}
+
 export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string {
   const body = [
     renderMasthead(input.masthead),
@@ -207,6 +220,7 @@ export function renderLegphelQuotationHtml(input: LegphelQuotationInput): string
     section,
     stayRows(input.stay),
     ...renderPriceBlock(input),
+    renderApartmentAmenities(input.amenities),
     note(input.closingNote, "quiet"),
     footer([input.quotationNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

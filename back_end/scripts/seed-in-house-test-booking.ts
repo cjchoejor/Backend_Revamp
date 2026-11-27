@@ -106,6 +106,7 @@ async function clean() {
   await prisma.roomDepartureRecord.deleteMany({ where: { entryId: { in: ids } } });
   // An ask to remove a room booked by mistake (2026-11-26).
   await prisma.roomRemovalRequest.deleteMany({ where: { entryId: { in: ids } } });
+  await prisma.apartmentExtraBed.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.timerRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.handoffRecord.deleteMany({ where: { entryId: { in: ids } } });
   await prisma.keyReturnRecord.deleteMany({ where: { entryId: { in: ids } } });

@@ -20,7 +20,8 @@ export type ConfigOwner =
   | "OTAConfigurationService"
   | "AIAgentConfigService"
   | "CommunicationConfigService"
-  | "PostStayAndGovernanceService";
+  | "PostStayAndGovernanceService"
+  | "ApartmentAdminService";
 
 /** Human-facing route hint shown when a domain-owned key is written via the generic path. */
 const OWNER_SURFACE: Record<ConfigOwner, string | null> = {
@@ -34,6 +35,7 @@ const OWNER_SURFACE: Record<ConfigOwner, string | null> = {
   OperationalScheduleService: "/api/admin/operational",
   OTAConfigurationService: "/api/admin/ota-config/*",
   AIAgentConfigService: "/api/admin/ai-agent-config/*",
+  ApartmentAdminService: "/api/admin/apartment-extras/*",
   CommunicationConfigService: "/api/admin/communication-config/*",
   PostStayAndGovernanceService: "/api/admin/post-stay/*",
 };
@@ -103,6 +105,10 @@ export const CONFIG_KEY_REGISTRY: Record<string, ConfigKeyMeta> = {
   // Papers to an agency or a company with their room types (2026-11-13, lib/paper-room-types.ts):
   // { enabled, levels }. Off, or nobody ticked, means they always go without.
   "papers.roomTypesForParties": { validate: isObject, owner: "ConfigurationService" },
+  // Apartments (2026-11-27): the hotel's list of items an apartment may hold, and the apartments'
+  // extra bed rate — written through Apartments on the admin console, never the generic route.
+  "apartment.amenityItems": { validate: isArray, owner: "ApartmentAdminService" },
+  "apartment.extraBedRate": { validate: isObject, owner: "ApartmentAdminService" },
   // Interim payments (2026-08-21): the night audit's schedule rule for long stays —
   // { enabled, everyNights, minimumOutstanding }. Manual requests never consult it.
   "interimPayment.schedule": { validate: isObject, owner: "ConfigurationService" },

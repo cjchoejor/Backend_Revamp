@@ -21,6 +21,7 @@ const packageSchema = z.object({
   weeklyRate: amount,
   monthlyRate: amount,
   sortOrder: z.number().optional().nullable(),
+  amenityKit: z.array(z.object({ name: z.string().max(200), count: z.number() })).max(100).optional().nullable(),
   units: z
     .array(
       z.object({
@@ -79,6 +80,36 @@ adminApartmentRouter.post("/apartment-packages/:id/active", L4, validateBody(z.o
     next(e);
   }
 });
+
+/** The hotel's list of items an apartment may hold, and the apartments' extra bed rate (2026-11-27). */
+adminApartmentRouter.get("/apartment-extras", L4, async (_req, res, next) => {
+  try {
+    res.set("Cache-Control", "no-store").json(await svc.getApartmentExtras(prisma));
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminApartmentRouter.put("/apartment-extras/amenity-items", L4, validateBody(z.object({ items: z.array(z.string().max(200)).max(300) })), async (req, res, next) => {
+  try {
+    res.json(await svc.setApartmentAmenityItems(prisma, req.body.items, req.actor!.actorId));
+  } catch (e) {
+    next(e);
+  }
+});
+
+adminApartmentRouter.put(
+  "/apartment-extras/extra-bed-rate",
+  L4,
+  validateBody(z.object({ rate: z.union([z.number(), z.string()]).optional().nullable(), withTaxes: z.boolean() })),
+  async (req, res, next) => {
+    try {
+      res.json(await svc.setApartmentExtraBedRate(prisma, req.body, req.actor!.actorId));
+    } catch (e) {
+      next(e);
+    }
+  },
+);
 
 adminApartmentRouter.delete("/apartment-packages/:id", L4, async (req, res, next) => {
   try {

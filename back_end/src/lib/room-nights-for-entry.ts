@@ -228,6 +228,28 @@ export async function assignedRoomNights(
     for (const n of nights) cur.nights.add(n);
     byRoom.set(r.roomId, cur);
   }
+  // A booking let as apartments names its apartments (2026-11-27, operator: "show it as one room using
+  // only their one number"): an apartment's rooms are one line, "Apartment 505 (Rooms 5051 + 5052)".
+  const entry = await prisma.entry.findUnique({ where: { id: entryId }, select: { useType: true } });
+  if (String(entry?.useType ?? "") === "APARTMENT" && byRoom.size) {
+    const links = await prisma.apartmentUnitRoom.findMany({
+      where: { roomId: { in: [...byRoom.keys()] } },
+      select: { roomId: true, unit: { select: { label: true, rooms: { select: { room: { select: { roomNumber: true } } } } } } },
+    });
+    const merged = new Map<string, { name: string; nights: Set<string> }>();
+    for (const [roomId, x] of byRoom) {
+      const u = links.find((l) => l.roomId === roomId)?.unit;
+      const nos = (u?.rooms ?? []).map((r) => r.room.roomNumber).sort((p, q) => p.localeCompare(q, undefined, { numeric: true }));
+      const key = u ? `apt:${u.label}` : `room:${roomId}`;
+      const name = u ? `Apartment ${u.label}${nos.length > 1 ? ` (Rooms ${nos.join(" + ")})` : nos[0] && nos[0] !== u.label ? ` (Room ${nos[0]})` : ""}` : x.name;
+      const cur = merged.get(key) ?? { name, nights: new Set<string>() };
+      for (const n of x.nights) cur.nights.add(n);
+      merged.set(key, cur);
+    }
+    return [...merged.values()]
+      .map((x) => ({ name: x.name, nights: [...x.nights].sort() }))
+      .sort((p, q) => p.name.localeCompare(q.name, undefined, { numeric: true }));
+  }
   return [...byRoom.values()]
     .map((x) => ({ name: x.name, nights: [...x.nights].sort() }))
     .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));

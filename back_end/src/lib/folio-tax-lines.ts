@@ -37,6 +37,8 @@ export const SERVICE_CHARGE_CORRECTION_DESCRIPTION_PREFIX = "Service charge corr
  */
 export const NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX = "Night audit room charge";
 export const NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX = "Night audit meal plan";
+/** An extra bed during an apartment stay (2026-11-27): "Night audit apartment extra bed · Apartment 702 · 2 beds · <record>". */
+export const NIGHT_AUDIT_APARTMENT_BED_PREFIX = "Night audit apartment extra bed";
 
 /** `Service charge (10.00%) on: <base description>` */
 export function serviceChargeLineDescription(rate: number, baseDescription: string): string {

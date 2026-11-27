@@ -22,7 +22,7 @@ import {
   type DocumentMasthead,
   type DocumentWatermark,
 } from "./legphel-document-shell.js";
-import { renderPriceBlock, type LegphelPriceBlock, type LegphelQuotationLine } from "./legphel-quotation-template.js";
+import { renderApartmentAmenities, renderPriceBlock, type ApartmentAmenityLine, type LegphelPriceBlock, type LegphelQuotationLine } from "./legphel-quotation-template.js";
 
 export type LegphelConfirmationVoucherInput = {
   masthead: DocumentMasthead;
@@ -55,6 +55,8 @@ export type LegphelConfirmationVoucherInput = {
    */
   lines?: LegphelQuotationLine[];
   datesShown?: boolean;
+  /** What each apartment holds, never priced (2026-11-27). */
+  amenities?: ApartmentAmenityLine[] | null;
   /** Inclusions + ID requirement. */
   closingNote: string;
   tariffVersion: string;
@@ -82,6 +84,7 @@ export function renderLegphelConfirmationVoucherHtml(input: LegphelConfirmationV
     ...(input.lines?.length
       ? renderPriceBlock({ lines: input.lines, datesShown: input.datesShown, hidePrices: true } as LegphelPriceBlock)
       : [row("Room · plan", input.roomAndPlan)]),
+    renderApartmentAmenities(input.amenities),
     note(input.closingNote, "quiet"),
     footer([input.voucherNo, input.bookingRef, input.issuanceRef ?? null, "E&OE", input.tariffVersion]),
   ]

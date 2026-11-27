@@ -26,6 +26,9 @@ import { captureSnapshotTx } from "../../lib/admin/entity-version-snapshot.js";
 import { lineTax } from "../../lib/stay-posting.js";
 import { round2, toDecimal } from "../../lib/money.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { cleanAmenityItemNames, cleanAmenityItems, DEFAULT_AMENITY_ITEMS, type AmenityItem } from "../../lib/apartment-amenities.js";
+import { getActiveConfigEntry } from "../../lib/config-store.js";
+import { supersedeConfigurationEntry } from "../../lib/admin/supersede-configuration.js";
 
 type DecimalInput = number | string;
 
@@ -40,6 +43,8 @@ export type ApartmentPackageInput = {
   monthlyRate: DecimalInput;
   sortOrder?: number | null;
   units: ApartmentUnitInput[];
+  /** What each of its apartments usually has, with counts, never priced (2026-11-27). */
+  amenityKit?: AmenityItem[] | null;
 };
 
 type Rule = { serviceChargeRate: number; gstRate: number };
@@ -120,6 +125,13 @@ function describe(row: PackageRow, rule: Rule) {
     name: row.name,
     carpetAreaSqft: row.carpetAreaSqft,
     amenities: row.amenities,
+    amenityKit: (() => {
+      try {
+        return cleanAmenityItems(row.amenityKit, row.name);
+      } catch {
+        return [] as AmenityItem[];
+      }
+    })(),
     isActive: row.isActive,
     sortOrder: row.sortOrder,
     ratesTypedWithTax: row.ratesTypedWithTax,
@@ -204,6 +216,7 @@ async function cleanInput(prisma: PrismaClient, input: ApartmentPackageInput, pa
     carpetAreaSqft = a;
   }
   const amenities = input.amenities?.trim() ? input.amenities.trim().replace(/\r\n/g, "\n") : null;
+  const amenityKit = cleanAmenityItems(input.amenityKit ?? [], `${name}'s usual list`);
   if (amenities && amenities.length > 4000) throw new ValidationError("The amenities are longer than 4,000 characters");
 
   const weeklyTyped = positive(input.weeklyRate, "weekly rate");
@@ -267,6 +280,7 @@ async function cleanInput(prisma: PrismaClient, input: ApartmentPackageInput, pa
       name,
       carpetAreaSqft,
       amenities,
+      amenityKit: amenityKit.length ? (amenityKit as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
       weeklyRate,
       monthlyRate,
       ratesTypedWithTax: withTaxes,
@@ -301,6 +315,7 @@ async function auditShape(tx: Prisma.TransactionClient, id: string) {
     name: row.name,
     carpetAreaSqft: row.carpetAreaSqft,
     amenities: row.amenities,
+    amenityKit: row.amenityKit,
     weeklyRate: row.weeklyRate.toFixed(2),
     monthlyRate: row.monthlyRate.toFixed(2),
     ratesTypedWithTax: row.ratesTypedWithTax,
@@ -395,4 +410,53 @@ export async function getApartmentPackage(prisma: PrismaClient, id: string) {
   const row = await prisma.apartmentPackage.findUnique({ where: { id }, include: packageInclude });
   if (!row) throw new NotFoundError("Apartment package");
   return describe(row, rule);
+}
+
+/* ------------------------------------------------------------------ the list of items, the extra bed rate */
+
+export const APARTMENT_AMENITY_ITEMS_KEY = "apartment.amenityItems";
+export const APARTMENT_EXTRA_BED_RATE_KEY = "apartment.extraBedRate";
+
+/** The hotel's list of items an apartment may hold, and the apartments' extra bed rate (2026-11-27). */
+export async function getApartmentExtras(prisma: PrismaClient) {
+  const rule = await resolveChargeRates(prisma);
+  const [items, bed] = await Promise.all([getActiveConfigEntry(prisma, APARTMENT_AMENITY_ITEMS_KEY), getActiveConfigEntry(prisma, APARTMENT_EXTRA_BED_RATE_KEY)]);
+  const list = Array.isArray(items?.configValue) && (items!.configValue as unknown[]).length ? (items!.configValue as unknown[]).map(String) : [...DEFAULT_AMENITY_ITEMS];
+  const v = (bed?.configValue ?? null) as { rate?: unknown; typed?: unknown; typedWithTax?: unknown } | null;
+  const rate = v?.rate != null && Number(v.rate) > 0 ? toDecimal(String(v.rate)) : null;
+  return {
+    serviceChargeRate: rule.serviceChargeRate,
+    gstRate: rule.gstRate,
+    amenityItems: list,
+    amenityItemsSaved: !!items,
+    extraBed: rate
+      ? { typedWithTax: v?.typedWithTax === true, ...apartmentRateFigures(rate, rule), typed: v?.typed != null ? Number(v.typed).toFixed(2) : null }
+      : null,
+  };
+}
+
+export async function setApartmentAmenityItems(prisma: PrismaClient, raw: unknown, actorId: string) {
+  const items = cleanAmenityItemNames(raw);
+  await prisma.$transaction((tx) =>
+    supersedeConfigurationEntry(tx, { configKey: APARTMENT_AMENITY_ITEMS_KEY, configValue: items, actorId, notes: "Apartments › Amenities" }),
+  );
+  return getApartmentExtras(prisma);
+}
+
+/** The apartments' extra bed rate, a bed a night; typed with taxes or without; empty takes it off. */
+export async function setApartmentExtraBedRate(prisma: PrismaClient, input: { rate?: DecimalInput | null; withTaxes: boolean }, actorId: string) {
+  const rule = await resolveChargeRates(prisma);
+  let value: Prisma.InputJsonValue;
+  if (input.rate == null || String(input.rate).trim() === "") {
+    value = { rate: null, typed: null, typedWithTax: false };
+  } else {
+    const typed = positive(input.rate, "extra bed rate");
+    const rate = input.withTaxes ? rateFromFigureWithTaxes(typed, rule) : typed;
+    if (!rate.gt(0)) throw new ValidationError("The rate comes to nothing once service charge and GST are taken out");
+    value = { rate: rate.toFixed(2), typed: input.withTaxes ? typed.toFixed(2) : null, typedWithTax: !!input.withTaxes };
+  }
+  await prisma.$transaction((tx) =>
+    supersedeConfigurationEntry(tx, { configKey: APARTMENT_EXTRA_BED_RATE_KEY, configValue: value, actorId, notes: "Apartments › Extra bed" }),
+  );
+  return getApartmentExtras(prisma);
 }

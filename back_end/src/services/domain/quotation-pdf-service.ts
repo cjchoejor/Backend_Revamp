@@ -22,6 +22,7 @@
  * snapshotting QuotationLine rows — pure read, always from the quotation's current terms.
  */
 import { paperNumber, printedProformaNumber, printedQuotationNumber, proformaNumberOf } from "../../lib/document-numbers.js";
+import { amenitiesForPaper } from "./apartment-extras-service.js";
 import { Prisma, type PrismaClient, type QuotationLine } from "@prisma/client";
 import { NotFoundError } from "../../lib/errors.js";
 import { labelRoomNights, roomNightsForEntry, stayNightDates, type NightsMode } from "../../lib/room-nights-for-entry.js";
@@ -692,6 +693,7 @@ async function buildQuotationDocRender(
     forGuest: billedParty ? guestName : null,
     attn: null,
     stay: withRooms(formatStayLines(checkIn, checkOut, nights), hideTypes ? roomsOnStay : null),
+    amenities: await amenitiesForPaper(prisma, q.entryId),
     closingNote: hidePrices
       ? "Prices are not shown on this copy — the rates, taxes and total for this stay are on the " +
         "priced quotation under the same number. Subject to availability at confirmation."

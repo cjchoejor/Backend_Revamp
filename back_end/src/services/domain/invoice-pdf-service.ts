@@ -993,6 +993,10 @@ export function guestsWords(e: { adultCount?: number | null; childCount?: number
 /** "202, 307, 503 · 3 rooms" — the rooms in number order. */
 export function roomsWords(rooms: readonly string[]): string | null {
   if (rooms.length === 0) return null;
+  // An apartment is one place (2026-11-27): "Apartment 505 (Rooms 5051 + 5052)".
+  if (rooms.every((r) => r.startsWith("Apartment "))) {
+    return rooms.length === 1 ? rooms[0]! : `${rooms.join(" · ")} · ${rooms.length} apartments`;
+  }
   const sorted = [...rooms].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   return rooms.length === 1 ? sorted[0]! : `${sorted.join(", ")} · ${rooms.length} rooms`;
 }
@@ -1295,7 +1299,9 @@ export async function generateOrLoadInvoicePdf(
 
   // Each room with its nights, written short (2026-10-30).
   const assigned = await assignedRoomNights(prisma, inv.entryId, { checkIn, checkOut }).catch(() => []);
+  const apartments = assigned.map((a) => a.name).filter((n) => n.startsWith("Apartment "));
   const html = composeTaxInvoiceHtml({
+    roomNumbers: apartments.length ? apartments : undefined,
     hotel,
     figures: fig,
     parties,

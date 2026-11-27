@@ -22,6 +22,7 @@ import {
   gstLineDescription,
   serviceChargeLineDescription,
 } from "../../lib/folio-tax-lines.js";
+import { apartmentBedLineDescription, apartmentBedsOnNight, NIGHT_AUDIT_APARTMENT_BED_PREFIX } from "../domain/apartment-extras-service.js";
 
 function operatingDateUtc(date: Date): Date {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate(), 0, 0, 0, 0));
@@ -367,6 +368,23 @@ export async function planNightForEntries(
         }
       }
 
+      // An extra bed asked for during an apartment stay (2026-11-27): one line a night per bed record,
+      // at its rate a bed without taxes, on the apartment's first room, taxed as any line.
+      for (const b of await apartmentBedsOnNight(prisma, entry.id, operatingDate)) {
+        const amount = Number(b.ratePerBed.mul(b.beds).toDecimalPlaces(2).toFixed(2));
+        if (!(amount > 0)) continue;
+        perRoomPostCandidates.push({
+          assignmentId: "",
+          roomId: b.roomId,
+          roomNumber: b.unitLabel,
+          amount,
+          lineType: FolioLineType.SERVICE,
+          description: apartmentBedLineDescription(b),
+          serviceChargeApplies: true,
+          gstApplies: true,
+        });
+      }
+
       // Idempotency: skip any per-room post whose (folioId, description, chargeDate) already exists.
       // Uses `description` as the discriminator since FolioLine has no roomId column.
       const perRoomPosts: PerRoomPost[] = [];
@@ -432,10 +450,12 @@ export async function reconcileTonightPostedAhead(
     where: {
       folioId,
       chargeDate: operatingDate,
-      lineType: { in: [FolioLineType.ROOM_CHARGE, FolioLineType.F_AND_B] },
+      lineType: { in: [FolioLineType.ROOM_CHARGE, FolioLineType.F_AND_B, FolioLineType.SERVICE] },
       OR: [
         { description: { startsWith: NIGHT_AUDIT_ROOM_CHARGE_DESCRIPTION_PREFIX } },
         { description: { startsWith: NIGHT_AUDIT_MEAL_PLAN_DESCRIPTION_PREFIX } },
+        // An apartment's extra bed (2026-11-27): ended tonight, its line is put right too.
+        { description: { startsWith: NIGHT_AUDIT_APARTMENT_BED_PREFIX } },
       ],
     },
     select: { id: true, lineType: true, description: true, amount: true },
