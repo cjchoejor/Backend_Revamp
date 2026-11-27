@@ -1,5 +1,6 @@
 import { InventoryClaimState } from "@prisma/client";
 import { PolicyGateBlockedError } from "../../lib/errors.js";
+import { describeRoomConflicts } from "../../lib/room-conflict-words.js";
 
 /**
  * Policy 25 — Speculative Hold Placement Policy (S2).
@@ -29,22 +30,6 @@ export function enforceSpeculativeHoldInventoryEligible(input: { currentClaimSta
   throw new PolicyGateBlockedError("ROOM_NOT_FREE", "Room is not available for speculative hold");
 }
 
-/** "Room 202 is reserved 2026-07-29→2026-07-30 by INQ-… · Dorji Wangmo" — mirrors p26. */
-function describeConflict(c: {
-  roomNumber?: string | null;
-  source: "RESERVED" | "HOLD";
-  entryReferenceNumber: string | null;
-  guestName: string | null;
-  startDate: Date;
-  endDate: Date;
-}) {
-  const day = (d: Date) => d.toISOString().slice(0, 10);
-  const who = [c.entryReferenceNumber, c.guestName].filter(Boolean).join(" · ");
-  const label = c.source === "RESERVED" ? "reserved" : "held";
-  const room = c.roomNumber ? `Room ${c.roomNumber}` : "Room";
-  return `${room} is ${label} ${day(c.startDate)}→${day(c.endDate)}${who ? ` by ${who}` : ""}`;
-}
-
 /**
  * Date-aware eligibility (2026-08-06) — the same rewrite Policy 26 got on 2026-07-29, applied
  * to the S2 hold. `Room.currentClaimState` is a NOW snapshot with no date dimension: it goes
@@ -56,6 +41,7 @@ function describeConflict(c: {
  */
 export function enforceNoOverlappingBookingForSpeculativeHold(input: {
   conflicts: Array<{
+    entryId?: string | null;
     roomNumber?: string | null;
     source: "RESERVED" | "HOLD";
     entryReferenceNumber: string | null;
@@ -65,10 +51,10 @@ export function enforceNoOverlappingBookingForSpeculativeHold(input: {
   }>;
 }) {
   if (input.conflicts.length === 0) return;
-  const detail = input.conflicts.map(describeConflict).join("; ");
+  const detail = describeRoomConflicts(input.conflicts);
   throw new PolicyGateBlockedError(
     "ROOM_NOT_FREE",
-    `Room is not available for speculative hold — ${detail}`,
+    detail,
   );
 }
 

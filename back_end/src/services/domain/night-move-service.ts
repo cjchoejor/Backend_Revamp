@@ -326,29 +326,43 @@ async function pricePlan(prisma: PrismaClient, entryId: string, p: DryPlan | nul
  * its own room, so the rows of a picked room and its new room come from that room's run, every other
  * row from the first. One composition row per room is the walk's invariant, so the rows name the plan.
  */
-function combinePlans(drys: RoomChangeOutcome[], picks: PickPlan[]): DryPlan | null {
+function combinePlans(drys: RoomChangeOutcome[], picks: PickPlan[], picture: NightPicture): DryPlan | null {
   const plans = drys.map((d) => d.plan ?? null);
   if (plans.some((p) => !p?.compositions)) return null;
+  // Each walk was run dry on the plan as it is now, so each room's row is taken from the walk that
+  // moves it: a room a pick leaves from its own walk, a room picks land in from the first walk that
+  // lands there, every other room from the first walk.
   const owner = new Map<string, number>();
   picks.forEach((p, i) => {
-    if (i === 0) return;
-    owner.set(p.R, i);
-    owner.set(p.to, i);
+    if (!owner.has(p.to)) owner.set(p.to, i);
   });
+  picks.forEach((p, i) => owner.set(p.R, i));
+  // The nights each room holds once every pick has moved. The walks run one after another, so a
+  // room two picks land in on different nights holds both (2026-11-27: two rooms' nights moved into
+  // Room 204 were priced on one of them, a night short on the preview).
+  const nightsOf = new Map<string, Set<string>>();
+  const add = (id: string, d: string) => nightsOf.set(id, (nightsOf.get(id) ?? new Set<string>()).add(d));
+  for (const n of picture) for (const id of n.roomIds) add(id, n.date);
+  for (const p of picks) {
+    for (const d of p.moved) nightsOf.get(p.R)?.delete(d);
+    for (const d of p.movedNew) add(p.to, d);
+  }
   type Row = { roomId: string };
+  const rowOf = (id: string): Row | null => {
+    const mine = plans[owner.get(id) ?? 0]!.compositions as unknown as Row[];
+    return mine.find((r) => r.roomId === id) ?? plans.map((pl) => (pl!.compositions as unknown as Row[]).find((r) => r.roomId === id)).find(Boolean) ?? null;
+  };
   const rows: Row[] = [];
   const counts: Record<string, number> = {};
-  plans.forEach((plan, i) => {
-    for (const r of plan!.compositions as unknown as Row[]) {
-      const o = owner.get(r.roomId) ?? 0;
-      if (o !== i) continue;
-      rows.push(r);
-      const c = plan!.perRoomNightCounts?.[r.roomId];
-      if (c != null) counts[r.roomId] = c;
-    }
-  });
+  for (const [id, nights] of nightsOf) {
+    if (nights.size === 0) continue;
+    const row = rowOf(id);
+    if (!row) return null;
+    rows.push(row);
+    counts[id] = nights.size;
+  }
   const first = plans[0]!;
-  return { ...first, compositions: rows as never, planRoomIds: Array.from(new Set(rows.map((r) => r.roomId))), perRoomNightCounts: counts };
+  return { ...first, compositions: rows as never, planRoomIds: rows.map((r) => r.roomId), perRoomNightCounts: counts };
 }
 
 /** "Room 205" · "Rooms 205 + 305" */
@@ -876,7 +890,7 @@ export async function previewNightMove(prisma: PrismaClient, actor: Actor, input
             return null;
           }
         }
-        const plan = drys.length === 1 ? drys[0].plan ?? null : combinePlans(drys, b.picks);
+        const plan = drys.length === 1 ? drys[0].plan ?? null : combinePlans(drys, b.picks, b.picture);
         return pricePlan(prisma, entry.id, plan).catch(() => null);
       };
       const chosen: "KEEP" | "NEW_TYPE" = input.priceMode === "NEW_TYPE" ? "NEW_TYPE" : "KEEP";

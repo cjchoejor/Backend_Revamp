@@ -1936,8 +1936,16 @@ async function changeRoomToNewSegmentInner(
             n(into.cnbUnder6Count) === n(movingComposition.cnbUnder6Count);
           if (!sameGuests) {
             const no = (id: string) => targetById.get(id)?.roomNumber ?? seatingRoomNumbersEarly.get(id) ?? "?";
+            // In words (2026-11-27, operator, on Room 307 refused into Room 305: "why can't i move …
+            // it seems there are no people also"): which guests each room has, and what to do.
+            const guestsWords = (c: { adultCount?: number | null; cnb6To10Count?: number | null; cnbUnder6Count?: number | null }) => {
+              const a = n(c.adultCount);
+              const k = n(c.cnb6To10Count) + n(c.cnbUnder6Count);
+              const parts = [a ? `${a} adult${a === 1 ? "" : "s"}` : null, k ? (k === 1 ? "1 child" : `${k} children`) : null].filter(Boolean);
+              return parts.length ? parts.join(" and ") : "nobody";
+            };
             throw new ValidationError(
-              `Room ${no(roomId)} holds other guests on this booking than Room ${ctx.fromRoom.roomNumber} — move the night into a free room, or set the guests at Negotiation`,
+              `Room ${no(roomId)} is this booking's room on other nights, for ${guestsWords(into)}; Room ${ctx.fromRoom.roomNumber} has ${guestsWords(movingComposition)}. A room keeps the same guests on every night it is held — move these nights into a room this booking doesn't use`,
             );
           }
           const setupOf = (c: { mealPlanCpCount?: number; mealPlanMaplCount?: number; mealPlanMapdCount?: number; mealPlanApCount?: number; mealPlanOthersCount?: number; othersBreakfastPax?: number; othersLunchPax?: number; othersDinnerPax?: number; extraBedCount?: number }) => ({

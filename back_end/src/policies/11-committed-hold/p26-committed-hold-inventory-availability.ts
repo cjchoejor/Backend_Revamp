@@ -1,5 +1,6 @@
 import { InventoryClaimState } from "@prisma/client";
 import { PolicyGateBlockedError } from "../../lib/errors.js";
+import { describeRoomConflicts } from "../../lib/room-conflict-words.js";
 
 /**
  * Policy 26 — Committed Hold Placement Policy
@@ -28,22 +29,6 @@ import { PolicyGateBlockedError } from "../../lib/errors.js";
  * check-in by the SIG-S6 per-room physical-ready check, which is the correct moment for it.
  */
 
-/** Formats a conflict as "Room 202 — 29 Jul→30 Jul, INQ-… (Dorji Wangmo)" for the operator. */
-function describeConflict(c: {
-  roomNumber?: string | null;
-  source: "RESERVED" | "HOLD";
-  entryReferenceNumber: string | null;
-  guestName: string | null;
-  startDate: Date;
-  endDate: Date;
-}) {
-  const day = (d: Date) => d.toISOString().slice(0, 10);
-  const who = [c.entryReferenceNumber, c.guestName].filter(Boolean).join(" · ");
-  const label = c.source === "RESERVED" ? "reserved" : "held";
-  const room = c.roomNumber ? `Room ${c.roomNumber}` : "Room";
-  return `${room} is ${label} ${day(c.startDate)}→${day(c.endDate)}${who ? ` by ${who}` : ""}`;
-}
-
 /**
  * Commercial availability: reject when another booking overlaps the requested stay dates.
  * `conflicts` must already exclude the entry placing the hold — a booking never conflicts with
@@ -61,10 +46,10 @@ export function enforceNoOverlappingBookingForCommittedHold(input: {
   }>;
 }) {
   if (input.conflicts.length === 0) return;
-  const detail = input.conflicts.map(describeConflict).join("; ");
+  const detail = describeRoomConflicts(input.conflicts);
   throw new PolicyGateBlockedError(
     "INVENTORY_NOT_AVAILABLE",
-    `Room is not available for committed hold — ${detail}`,
+    detail,
     {
       // What was found, for a caller that words it itself (a room move's preview, 2026-10-12).
       conflicts: input.conflicts.map((c) => ({
