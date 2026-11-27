@@ -83,6 +83,13 @@ export type RoomMoveLegInput = {
    * the agreed price, NEW_TYPE = priced anew at the new dates (and room type).
    */
   newCheckInDate?: string | null;
+  /**
+   * Only these nights of the room move, "YYYY-MM-DD" (2026-11-27, operator: "make the swap work from
+   * Praneesha's side") — a night or two of a room the booking keeps on other nights; the rest stay.
+   * The same dates only. A booking holding the room it moves into on those nights swaps into the room
+   * left, on those nights alone. Absent: every night of the room.
+   */
+  nights?: string[] | null;
 };
 
 const STAGE_WORD: Record<string, string> = {
@@ -234,6 +241,8 @@ export type RoomMovePreviewLeg = {
   nightsLabel: string | null;
   /** Set when the stay moves to other dates too (2026-10-19). */
   newCheckInDate: string | null;
+  /** Only `nights` of the room move — the room keeps the booking's other nights (2026-11-27). */
+  partOfStay: boolean;
   /** The nights the leg lands on when its dates change. */
   toNights: string[] | null;
   toNightsLabel: string | null;
@@ -278,22 +287,45 @@ type PlannedLeg = RoomMoveLegInput & {
   guestOverlapConfirmed: boolean;
 };
 
-/** A leg's nights: the ones it leaves, and — when its dates change — the ones it lands on. */
-type LegNights = { from: string[]; to: string[]; dated: boolean };
+/**
+ * A leg's nights: the ones it leaves, and — when its dates change — the ones it lands on. `all` is
+ * every night the booking holds the room; `part` says only some of them move, and `missing` names
+ * nights asked for that the booking does not hold in the room.
+ */
+type LegNights = { from: string[]; to: string[]; dated: boolean; all: string[]; part: boolean; missing: string[] };
 
 const shiftIso = (d: string, days: number) => iso(new Date(new Date(`${d}T00:00:00.000Z`).getTime() + days * 86_400_000));
 
-async function legNightsOf(prisma: PrismaClient, leg: { entryId: string; fromRoomId: string; newCheckInDate?: string | null }): Promise<LegNights> {
-  let from: string[] = [];
+async function legNightsOf(
+  prisma: PrismaClient,
+  leg: { entryId: string; fromRoomId: string; newCheckInDate?: string | null; nights?: string[] | null },
+): Promise<LegNights> {
+  let all: string[] = [];
   try {
-    from = (await roomChangeNights(prisma, leg.entryId, leg.fromRoomId)).map((n) => n.slice(0, 10)).sort();
+    all = (await roomChangeNights(prisma, leg.entryId, leg.fromRoomId)).map((n) => n.slice(0, 10)).sort();
   } catch {
-    from = []; // the walk refuses this leg itself, in its own words
+    all = []; // the walk refuses this leg itself, in its own words
   }
+  if (leg.nights?.length) {
+    const asked = [...new Set(leg.nights.map((n) => n.slice(0, 10)))].sort();
+    const from = asked.filter((n) => all.includes(n));
+    const missing = asked.filter((n) => !all.includes(n));
+    return { from, to: from, dated: false, all, part: from.length > 0 && from.length < all.length, missing };
+  }
+  const from = all;
   const target = leg.newCheckInDate?.slice(0, 10) ?? null;
-  if (!target || from.length === 0 || target === from[0]) return { from, to: from, dated: false };
+  if (!target || from.length === 0 || target === from[0]) return { from, to: from, dated: false, all, part: false, missing: [] };
   const days = Math.round((Date.parse(`${target}T00:00:00.000Z`) - Date.parse(`${from[0]}T00:00:00.000Z`)) / 86_400_000);
-  return { from, to: from.map((n) => shiftIso(n, days)), dated: true };
+  return { from, to: from.map((n) => shiftIso(n, days)), dated: true, all, part: false, missing: [] };
+}
+
+/**
+ * The walk's form for a leg (2026-11-27): a part of the room's stay moves night by night and the rest
+ * stays in the room; every night of it, the room is changed whole.
+ */
+function walkFormOf(leg: { fromRoomId: string; toRoomId: string }, all: string[], nights: string[] | null): { toRoomId: string } | { perNight: Array<{ date: string; roomId: string }> } {
+  if (!nights?.length || all.every((n) => nights.includes(n))) return { toRoomId: leg.toRoomId };
+  return { perNight: all.map((date) => ({ date, roomId: nights.includes(date) ? leg.toRoomId : leg.fromRoomId })) };
 }
 
 /**
@@ -549,6 +581,10 @@ async function withSwapPartners(
       if (leavingRoom(holder, leg.toRoomId)) continue;
       // Their nights in the room this leg takes.
       const theirs = new Set(await landsOn({ entryId: holder, fromRoomId: leg.toRoomId }));
+      // A part of a room's stay trades on those nights alone (2026-11-27): the booking in the way
+      // takes the room left on the nights it is in the way, and keeps its room on the others.
+      const inWayNights = plan.part || leg.nights?.length ? nights.filter((n) => theirs.has(n)) : null;
+      const partnerNights = inWayNights && inWayNights.length > 0 && inWayNights.length < theirs.size ? inWayNights : null;
       // The room the chain started from — passing on only when another leg lands there on one of
       // their nights.
       let back = leg.fromRoomId;
@@ -582,6 +618,7 @@ async function withSwapPartners(
         displacedBy: leg.entryId,
         newCheckInDate: null,
         guestOverlapConfirmed: false,
+        ...(partnerNights ? { nights: partnerNights } : {}),
       });
     }
   }
@@ -665,7 +702,7 @@ async function dryRunLegs(
         fromRoomId: leg.input.fromRoomId,
         ...(n?.dated
           ? { dateShift: datedWalk(leg.input, n, missingNote ? "(preview — the guest's words to follow)" : leg.input.guestAgreedNote) }
-          : { toRoomId: leg.input.toRoomId }),
+          : walkFormOf(leg.input, n?.all ?? [], n?.part ? n.from : null)),
         reason: reason || "Room move preview",
         dryRun: true,
         moveContext,
@@ -819,9 +856,12 @@ export async function previewRoomMove(
     displacedBy: l.displacedBy ?? null,
     newCheckInDate: l.newCheckInDate?.trim().slice(0, 10) || null,
     guestOverlapConfirmed: l.guestOverlapConfirmed === true,
+    ...(l.nights?.length ? { nights: [...new Set(l.nights.map((n) => String(n).trim().slice(0, 10)))].sort() } : {}),
   }));
   for (const l of asked) {
     if (l.newCheckInDate && !/^\d{4}-\d{2}-\d{2}$/.test(l.newCheckInDate)) throw new ValidationError("newCheckInDate must be a date (YYYY-MM-DD)");
+    if (l.nights?.some((n) => !/^\d{4}-\d{2}-\d{2}$/.test(n))) throw new ValidationError("Each night must be a date (YYYY-MM-DD)");
+    if (l.nights?.length && l.newCheckInDate) throw new ValidationError("A room's nights move on the same dates only — move the whole stay to change its dates");
   }
   // Only the rooms the desk picked count; partner legs it sends back (displacedBy) were the server's.
   const selectedCount = new Set(asked.filter((l) => !l.displacedBy).map(legKey)).size;
@@ -838,6 +878,10 @@ export async function previewRoomMove(
   const shape = [
     ...shapeRefusals(planned, rooms, nightsOf),
     ...partnerRefusals,
+    ...planned.flatMap((l) => {
+      const missing = nightsOf.get(legKey(l))?.missing ?? [];
+      return missing.length ? [`${l.entryId} does not have Room ${rooms.get(l.fromRoomId)?.roomNumber ?? "?"} on ${missing.map(fmtNight).join(", ")}`] : [];
+    }),
   ];
   const legs = await dryRunLegs(prisma, actor, planned, reason, nightsOf);
 
@@ -891,6 +935,7 @@ export async function previewRoomMove(
       nights,
       nightsLabel: nights.length ? nightsLabel(nights) : null,
       newCheckInDate: dated ? n!.to[0] : null,
+      partOfStay: n?.part === true,
       toNights: dated ? n!.to : null,
       toNightsLabel: dated ? nightsLabel(n!.to) : null,
       sameType: sameTypeOf(leg),
@@ -1126,6 +1171,9 @@ async function runLeg(
         });
       }
     }
+    // Only some of the room's nights (2026-11-27): the rest stay where they are.
+    const partNights = !dated && toNights.length > 0 ? toNights.map((n) => String(n).slice(0, 10)) : null;
+    const partAll = partNights ? (await roomChangeNights(prisma, leg.entryId, leg.fromRoomId)).map((n) => n.slice(0, 10)).sort() : [];
     const out = await changeRoomToNewSegment(prisma, actor, {
       entryId: leg.entryId,
       fromRoomId: leg.fromRoomId,
@@ -1133,11 +1181,11 @@ async function runLeg(
         ? {
             dateShift: datedWalk(
               { fromRoomId: leg.fromRoomId, toRoomId: leg.toRoomId, priceMode: leg.priceMode },
-              { from: Array.isArray(leg.nights) ? (leg.nights as string[]) : [], to: toNights, dated: true },
+              { from: Array.isArray(leg.nights) ? (leg.nights as string[]) : [], to: toNights, dated: true, all: [], part: false, missing: [] },
               leg.guestAgreedNote,
             ),
           }
-        : { toRoomId: leg.toRoomId }),
+        : walkFormOf(leg, partAll, partNights)),
       reason,
       // A walk back restores the booking's own terms; a dated walk carries its setup as it is.
       ...(opts.roomCompositions?.length && !dated ? { roomCompositions: opts.roomCompositions } : {}),
@@ -1298,7 +1346,9 @@ async function walkBack(
               toNights: l.nights as Prisma.InputJsonValue,
               newCheckInDate: new Date(`${String((l.nights as string[])[0]).slice(0, 10)}T00:00:00.000Z`),
             }
-          : { nights: l.nights as Prisma.InputJsonValue }),
+          : !l.newCheckInDate && Array.isArray(l.toNights)
+            ? { nights: l.nights as Prisma.InputJsonValue, toNights: l.toNights as Prisma.InputJsonValue }
+            : { nights: l.nights as Prisma.InputJsonValue }),
         originStage: l.originStage,
         priceMode: l.priceMode,
       },
@@ -1376,7 +1426,11 @@ export async function executeRoomMove(
             nights: l.nights as Prisma.InputJsonValue,
             ...(l.newCheckInDate && l.toNights
               ? { newCheckInDate: new Date(`${l.newCheckInDate}T00:00:00.000Z`), toNights: l.toNights as Prisma.InputJsonValue }
-              : {}),
+              : // A part of the room's stay (2026-11-27): `toNights` with no new first night says only
+                // these nights move — the claim covers them, and the walk moves them night by night.
+                l.partOfStay
+                ? { toNights: l.nights as Prisma.InputJsonValue }
+                : {}),
             originStage: l.stage as Stage,
             priceMode: l.priceMode,
             guestAgreedNote: l.guestAgreedNote,

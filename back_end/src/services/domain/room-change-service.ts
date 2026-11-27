@@ -2505,6 +2505,13 @@ async function changeRoomToNewSegmentInner(
         }
       : null;
 
+  // A rate carried onto a room of another type that is under that type's minimum is the GM's or an
+  // admin's (2026-11-27: a swap's partner kept its Nu 2,000 into a Suite whose floor is Nu 3,825, and
+  // the FOM's walk stopped at the silent quote, after the booking had gone back a step). Asked here,
+  // before the re-entry and in the preview's dry run alike — the same rule the quote runs, a price
+  // this booking already agreed for that type carrying.
+  if (newCompositions?.length) await enforceFloorBeforeWalk(prisma, input.entryId, newCompositions, actor.actorLevel);
+
   // ── Dry run (a room move's preview, 2026-10-12): everything above validated, nothing written ──
   if (input.dryRun) {
     const perRoomNightCounts: Record<string, number> = {};

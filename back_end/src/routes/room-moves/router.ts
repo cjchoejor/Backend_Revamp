@@ -38,6 +38,8 @@ const legSchema = z.object({
   displacedBy: z.string().trim().max(64).nullable().optional(),
   // The desk's answer: the guest also holds another booking over the new nights, and both are meant.
   guestOverlapConfirmed: z.boolean().optional(),
+  // Only these nights of the room move (2026-11-27) — the same dates.
+  nights: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(62).nullable().optional(),
   // The stay's new first night when it moves to other dates too (2026-10-19, trading stays).
   newCheckInDate: z
     .string()
