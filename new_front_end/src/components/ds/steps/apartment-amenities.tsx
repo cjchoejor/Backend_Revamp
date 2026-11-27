@@ -81,58 +81,57 @@ function UnitList({
           {packageName}
           {roomNumbers.length > 1 ? ` · Rooms ${roomNumbers.join(" + ")}` : ""}
         </span>
+        <span className="apt-amen-n">
+          {items.length} item{items.length === 1 ? "" : "s"}
+        </span>
         <span className="ln" />
         <span className="muted">
           {source === "BOOKING" ? "kept for this booking" : source === "PACKAGE" ? "the package's usual list — not saved for this booking yet" : "nothing listed yet"}
         </span>
       </div>
+      {/* A tile per item, several to a row (2026-11-27, operator: "it's too long, and non efficient"). */}
       {items.length ? (
-        <table className="table apt-amen-t">
-          <thead>
-            <tr>
-              <th>Item</th>
-              <th className="num">Count</th>
-              {editable ? <th /> : null}
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((it, i) => (
-              <tr key={it.name}>
-                <td>{it.name}</td>
-                <td className="num">
-                  {editable ? (
-                    <span className="stepper">
-                      <button type="button" aria-label={`One fewer ${it.name}`} onClick={() => setN(i, it.count - 1)} disabled={it.count <= 0}>
-                        −
-                      </button>
-                      <input
-                        className="input"
-                        inputMode="numeric"
-                        aria-label={`${it.name} — count`}
-                        value={String(it.count)}
-                        onChange={(e) => {
-                          if (/^\d{0,2}$/.test(e.target.value)) setN(i, Number(e.target.value || 0));
-                        }}
-                      />
-                      <button type="button" aria-label={`One more ${it.name}`} onClick={() => setN(i, it.count + 1)} disabled={it.count >= 99}>
-                        +
-                      </button>
-                    </span>
-                  ) : (
-                    it.count
-                  )}
-                </td>
-                {editable ? (
-                  <td className="num">
-                    <button type="button" className="x-btn" aria-label={`Take ${it.name} off the list`} title={`Take ${it.name} off the list`} onClick={() => setItems((prev) => prev.filter((_, k) => k !== i))}>
-                      ×
+        <ul className="apt-amen-grid" aria-label={`What apartment ${label} holds`}>
+          {items.map((it, i) => (
+            <li key={it.name} className={it.count === 0 ? "zero" : undefined}>
+              <span className="nm" title={it.name}>
+                {it.name}
+              </span>
+              {editable ? (
+                <>
+                  <span className="stepper">
+                    <button type="button" aria-label={`One fewer ${it.name}`} onClick={() => setN(i, it.count - 1)} disabled={it.count <= 0}>
+                      −
                     </button>
-                  </td>
-                ) : null}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+                    <input
+                      className="input"
+                      inputMode="numeric"
+                      aria-label={`${it.name} — count`}
+                      value={String(it.count)}
+                      onChange={(e) => {
+                        if (/^\d{0,2}$/.test(e.target.value)) setN(i, Number(e.target.value || 0));
+                      }}
+                    />
+                    <button type="button" aria-label={`One more ${it.name}`} onClick={() => setN(i, it.count + 1)} disabled={it.count >= 99}>
+                      +
+                    </button>
+                  </span>
+                  <button
+                    type="button"
+                    className="x-btn"
+                    aria-label={`Take ${it.name} off the list`}
+                    title={`Take ${it.name} off the list`}
+                    onClick={() => setItems((prev) => prev.filter((_, k) => k !== i))}
+                  >
+                    ×
+                  </button>
+                </>
+              ) : (
+                <b className="ct">{it.count}</b>
+              )}
+            </li>
+          ))}
+        </ul>
       ) : (
         <p className="muted" style={{ margin: "4px 0" }}>
           Nothing listed for this apartment.
@@ -168,9 +167,11 @@ function UnitList({
           <span className="ln" />
           {changed ? (
             <>
-              <Button kind="quiet" compact onClick={() => setItems(saved)}>
-                Undo
-              </Button>
+              {canon(items) !== savedKey ? (
+                <Button kind="quiet" compact onClick={() => setItems(saved)}>
+                  Undo
+                </Button>
+              ) : null}
               <Button kind="primary" className="go" compact onClick={() => onSave(items)} state={saving ? "working" : "default"} workingLabel="Saving…">
                 Save the list
               </Button>

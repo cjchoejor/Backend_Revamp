@@ -2584,12 +2584,27 @@
   }
   & .apt-t td.apt-rent,
   & .apt-t td.apt-stay {
-    text-align: right;
+    text-align: center;
     min-width: 150px;
   }
   & .apt-t td.apt-rent .apt-sub,
   & .apt-t td.apt-stay .apt-sub {
-    text-align: right;
+    text-align: center;
+  }
+  /* Service charge and GST (2026-11-27): the tick, the stay's figure under it. */
+  & .apt-t td.apt-tax {
+    text-align: center;
+    min-width: 92px;
+  }
+  & .apt-t td.apt-tax input[type="checkbox"] {
+    display: block;
+    margin: 0 auto 3px;
+    width: 15px;
+    height: 15px;
+  }
+  & .apt-t td.apt-tax .apt-sub {
+    font-variant-numeric: tabular-nums;
+    color: var(--ink-2);
   }
   & .apt-t .apt-figure {
     display: block;
@@ -2599,8 +2614,10 @@
     color: var(--ink);
   }
   & .apt-t td.apt-rent input.rct-in {
-    text-align: right;
+    text-align: center;
     width: 120px;
+    display: block;
+    margin: 0 auto;
   }
   & .apt-t td.num {
     font-variant-numeric: tabular-nums;

@@ -307,13 +307,17 @@ export function ApartmentCompositionsTable({
   }, [faultsKey]);
 
   // ---- The server's figures ----------------------------------------------------------------
+  // The booking's discount comes off the rent as off any room's net (2026-11-27), so the server prices it.
+  const discNum = Number(discountValue ?? "");
+  const discount = Number.isFinite(discNum) && discNum > 0 ? ((discountUnit ?? "percent") === "amount" ? { amount: discNum } : { percent: discNum }) : null;
+  const discKey = JSON.stringify(discount);
   const [previewBody, setPreviewBody] = useState<Parameters<typeof previewQuotationPricing>[2] | null>(null);
   useEffect(() => {
     if (!entryId || compositions.length === 0) return;
-    const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount: null, ...(previewStay ? { stay: previewStay } : {}) }), 450);
+    const t = setTimeout(() => setPreviewBody({ roomCompositions: compositions, discount, ...(previewStay ? { stay: previewStay } : {}) }), 450);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [compKey, entryId, previewStay?.checkInDate, previewStay?.checkOutDate]);
+  }, [compKey, discKey, entryId, previewStay?.checkInDate, previewStay?.checkOutDate]);
   const previewQuery = useQuery({
     queryKey: ["quotation-live-preview", entryId, previewBody],
     queryFn: () => previewQuotationPricing(session!, entryId!, previewBody!),
@@ -362,7 +366,8 @@ export function ApartmentCompositionsTable({
             An apartment is let as one place: its rooms go together, priced by the rent. Its guests cook for
             themselves, so there are no meal plans, and no extra bed. The rent is the package&rsquo;s for the
             month or the week; Edit rent sets another for this booking. Service charge and GST are added on
-            top, period by period.
+            top, period by period; the service charge can be waived. A fixed discount comes off the rent
+            before service charge and GST, period by period.
           </Help>
         )}
       </div>
@@ -387,6 +392,8 @@ export function ApartmentCompositionsTable({
               <th title={`Children under ${youngMax + 1}`}>&lt;{youngMax + 1}</th>
               <th title="Guests in the apartment">Guests</th>
               <th className="apt-rent">{units[0] ? `Rent ${planWord(units[0])}` : "Rent"}</th>
+              <th className="apt-tax" title="Service charge on the stay's rent — untick to waive it">SC</th>
+              <th className="apt-tax" title="GST on the stay's rent and its service charge — always charged">GST</th>
               <th className="apt-stay" title="The stay's rent with service charge and GST">Stay</th>
             </tr>
           </thead>
@@ -446,9 +453,29 @@ export function ApartmentCompositionsTable({
                         : `${planWord(a)} · Nu ${money(a.rent.total)} with SC and GST`}
                     </span>
                   </td>
+                  <td className="apt-tax">
+                    <input
+                      type="checkbox"
+                      checked={r.sc}
+                      disabled={lockCommercial || readOnly}
+                      aria-label={`Apartment ${a.label} — service charge`}
+                      title={lockCommercial ? "Waiving the service charge now is a re-price, not a desk edit" : r.sc ? "Charged — untick to waive it" : "Waived — tick to charge it"}
+                      onChange={(e) => set(a, { sc: e.target.checked })}
+                    />
+                    <span className="apt-sub">{lead ? `Nu ${money(lead.payableServiceCharge ?? lead.serviceCharge)}` : "—"}</span>
+                  </td>
+                  <td className="apt-tax" title="GST is charged on every stay">
+                    <input type="checkbox" checked disabled aria-label={`Apartment ${a.label} — GST`} />
+                    <span className="apt-sub">{lead ? `Nu ${money(lead.payableGst ?? lead.gst)}` : "—"}</span>
+                  </td>
                   <td className="apt-stay">
-                    <span className="apt-figure">{lead ? `Nu ${money(lead.total)}` : "—"}</span>
-                    {periods.length > 0 && <span className="apt-sub">{periodWords(a.plan, periods)}</span>}
+                    <span className="apt-figure">{lead ? `Nu ${money(lead.payableTotal ?? lead.total)}` : "—"}</span>
+                    {periods.length > 0 && (
+                      <span className="apt-sub">
+                        {periodWords(a.plan, periods)}
+                        {discount && lead && Number(lead.payableTotal ?? lead.total) !== Number(lead.total) ? " · after the discount" : ""}
+                      </span>
+                    )}
                   </td>
                 </tr>
               );
@@ -462,14 +489,20 @@ export function ApartmentCompositionsTable({
         discountUnit={discountUnit}
         onDiscountChange={onDiscountChange}
         lockCommercial={lockCommercial || readOnly}
-        notPossible="A discount on an apartment's rent is not possible — set the rent itself with Edit rent."
       />
 
       {preview && (
         <div className="rct-live">
           <span className="k">Live total</span>
           <span className="parts">
-            <i>Net</i> {money(preview.payableSubtotal)} <i>+ SC</i> {money(preview.payableServiceCharge)} <i>+ GST</i> {money(preview.payableGst)}
+            <i>Net</i> {money(preview.subtotal)}
+            {preview.discount ? (
+              <>
+                {" "}
+                <i>− discount</i> {money(preview.discount.netReduction)} <i>=</i> {money(preview.payableSubtotal)}
+              </>
+            ) : null}{" "}
+            <i>+ SC</i> {money(preview.payableServiceCharge)} <i>+ GST</i> {money(preview.payableGst)}
           </span>
           <b className="tot">
             {preview.currency} {money(preview.payable)}

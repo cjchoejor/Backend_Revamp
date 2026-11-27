@@ -91,6 +91,11 @@ export type QuotationLivePreviewRoom = {
   gst: number;
   /** Tax-inclusive total for this room, before any booking discount. */
   total: number;
+  /** The room's figures once the booking discount is off (2026-11-27). */
+  payableSubtotal?: number;
+  payableServiceCharge?: number;
+  payableGst?: number;
+  payableTotal?: number;
   isFoc: boolean;
   /** True when per-date meal plans mean this room's meals are not one multiplication. */
   hasNightMealOverrides: boolean;

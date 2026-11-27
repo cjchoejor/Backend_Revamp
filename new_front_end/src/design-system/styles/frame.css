@@ -3256,15 +3256,20 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .apt-amen + .apt-amen { border-top: 1px solid var(--line); }
 .ds .apt-amen-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 .ds .apt-amen-head b { font-size: 14px; }
+.ds .apt-amen-n { font-size: 12px; font-weight: 600; color: var(--ink-2); padding: 1px 7px; border-radius: 9px; background: var(--surface-2); }
+/* What the apartment holds, a tile per item (2026-11-27): several to a row, the count beside the name. */
+.ds .apt-amen-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 6px 10px; margin: 2px 0 4px; padding: 0; list-style: none; }
+.ds .apt-amen-grid li { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 3px 4px 3px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.ds .apt-amen-grid li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+.ds .apt-amen-grid li .ct { min-width: 24px; text-align: right; font-variant-numeric: tabular-nums; padding-right: 6px; }
+.ds .apt-amen-grid li.zero .nm, .ds .apt-amen-grid li.zero .ct { color: var(--ink-3); }
 .ds .apt-amen-head .ln, .ds .apt-amen-add .ln { flex: 1; }
-.ds .apt-amen-t { max-width: 520px; }
-.ds .apt-amen-t td, .ds .apt-amen-t th { padding: 4px 8px; }
-.ds .apt-amen-t .num { text-align: right; width: 1%; white-space: nowrap; }
-.ds .apt-amen .stepper { display: inline-flex; align-items: stretch; height: 30px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; overflow: hidden; }
-.ds .apt-amen .stepper button { width: 28px; padding: 0; border: 0; background: var(--surface-2); color: var(--ink); font-size: 16px; font-weight: 700; cursor: pointer; }
+.ds .apt-amen .stepper { display: inline-flex; align-items: stretch; height: 26px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; overflow: hidden; flex: none; }
+.ds .apt-amen .stepper button { width: 24px; padding: 0; border: 0; background: var(--surface-2); color: var(--ink); font-size: 15px; font-weight: 700; line-height: 1; cursor: pointer; }
 .ds .apt-amen .stepper button:disabled { color: var(--ink-4); cursor: default; }
-.ds .apt-amen .stepper .input { width: 40px; height: 100%; border: 0; border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); border-radius: 0; text-align: center; padding: 0; }
-.ds .apt-amen .x-btn { width: 26px; height: 26px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; color: var(--danger); font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; }
+.ds .apt-amen .stepper .input { width: 30px; height: 100%; border: 0; border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); border-radius: 0; text-align: center; padding: 0; font-weight: 600; }
+.ds .apt-amen .x-btn { width: 22px; height: 22px; flex: none; border: 0; border-radius: 3px; background: transparent; color: var(--ink-3); font-size: 15px; font-weight: 700; line-height: 1; cursor: pointer; }
+.ds .apt-amen .x-btn:hover { background: var(--danger-soft, #fbeaea); color: var(--danger); }
 .ds .apt-amen .x-btn:hover { background: var(--surface-2); }
 .ds .apt-amen-add { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
 .ds .apt-amen-add .field { margin: 0; }
