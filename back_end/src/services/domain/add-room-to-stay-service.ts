@@ -76,6 +76,8 @@ function refusalOf(entry: Stay): string | null {
 
 /** The longest a booking of its own may run from the day the new guests arrive. */
 const MAX_NIGHTS = 90;
+/** How far ahead friends of the group may be booked (2026-11-27: "tomorrow or later as well"). */
+const MAX_DAYS_AHEAD = 365;
 
 const parseDay = (v: string | null | undefined, label: string): Date | null => {
   if (!v) return null;
@@ -86,19 +88,21 @@ const parseDay = (v: string | null | undefined, label: string): Date | null => {
 };
 
 /**
- * When the new guests come and go. They arrive today or on a later night of the group's stay, and
- * leave the day after at the earliest — with the group, before it, or after it.
+ * When the new guests come and go. They arrive today or on any later day (2026-11-27, operator: "we
+ * can't make a new entry with different check in date than today" — the first cut kept them inside the
+ * group's stay), and leave the day after at the earliest — with the group, before it, or after it.
  */
 function windowOf(entry: Stay, today: Date, arriveRaw?: string | null, leaveRaw?: string | null) {
   const groupIn = utcDateOnly(entry.checkInDate!);
   const groupOut = effectiveCheckOutDate(entry);
-  const lastNight = groupOut ? addUtcDays(groupOut, -1) : null;
+  const lastNight = addUtcDays(today, MAX_DAYS_AHEAD);
   const arrive = parseDay(arriveRaw, "The day they arrive") ?? today;
-  const leave = parseDay(leaveRaw, "The day they leave") ?? groupOut ?? addUtcDays(arrive, 1);
+  // With the group when the group is still here after they come; else the night after they come.
+  const leave = parseDay(leaveRaw, "The day they leave") ?? (groupOut && groupOut.getTime() > arrive.getTime() ? groupOut : addUtcDays(arrive, 1));
   let refusal: string | null = null;
-  if (!groupOut || !lastNight || lastNight.getTime() < today.getTime()) refusal = "The group leaves today — start a new booking for the new guests";
+  if (!groupOut) refusal = "This booking has no check-out date";
   else if (arrive.getTime() < today.getTime()) refusal = "They can't arrive before today";
-  else if (arrive.getTime() > lastNight.getTime()) refusal = `They arrive while the group is here — on ${fmtDay(ymdUtc(lastNight))} at the latest; later than that, start a new booking`;
+  else if (arrive.getTime() > lastNight.getTime()) refusal = `A room is added up to ${MAX_DAYS_AHEAD} days ahead — they arrive by ${fmtDay(ymdUtc(lastNight))}`;
   else if (leave.getTime() <= arrive.getTime()) refusal = "They leave the day after they arrive at the earliest";
   else if (leave.getTime() > addUtcDays(arrive, MAX_NIGHTS).getTime()) refusal = `A room is added for ${MAX_NIGHTS} nights at most`;
   // On the check-in day a room with the group's own dates joins the booking itself.
@@ -141,7 +145,7 @@ export async function previewAddRoom(prisma: PrismaClient, entryId: string, acto
     today: ymdUtc(today),
     arrive: ymdUtc(arrive),
     leave: ymdUtc(leave),
-    /** The latest day they may arrive (the group's last night), and leave. */
+    /** The latest day they may arrive, and leave. */
     arriveLatest: w?.lastNight ? ymdUtc(w.lastNight) : null,
     leaveLatest: ymdUtc(addUtcDays(arrive, MAX_NIGHTS)),
     /** Rooms leaving on the group's check-out join the booking itself — only on its check-in day. */
