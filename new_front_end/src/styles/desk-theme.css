@@ -3242,6 +3242,14 @@
     border-color: var(--terra);
     color: #fff8f3;
   }
+  /* Picked for this booking, but another booking holds the room that night now (2026-11-27): a
+     red outline on a pale stop tint, so it reads as a pick in trouble, not a room of someone else's. */
+  & .rst-chip.lost {
+    background: var(--stop-t);
+    border: 2px dashed var(--stop);
+    color: var(--stop);
+    font-weight: 800;
+  }
   /* Per-night mode — individual cells are the click targets. */
   & button.rst-chip {
     cursor: pointer;

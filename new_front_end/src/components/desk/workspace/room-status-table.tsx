@@ -154,6 +154,26 @@ type OccupantLike = {
 };
 
 /** "Dorji Wangmo" — or the agent/corporate name when the guest profile has none. */
+/**
+ * Rooms this booking has picked on nights another booking now holds them (2026-11-27, operator on the
+ * hotel's ENT-20261127-0011: "on 29th it says 7/7 picked but the rooms selected are showing only 5"). A
+ * pick holds nothing until the booking is blocked or reserved, so another booking can reserve a room
+ * this one picked — the pick then stands on a room it cannot have.
+ */
+export function picksTakenByOthers(
+  perDate: Array<{ date: string; occupiedRoomIds: Array<{ roomId: string }> }> | null | undefined,
+  byNight: Record<string, string[]>,
+): Array<{ night: string; roomId: string; holder: string | null }> {
+  const out: Array<{ night: string; roomId: string; holder: string | null }> = [];
+  for (const pd of perDate ?? []) {
+    const picks = byNight[pd.date] ?? [];
+    for (const o of pd.occupiedRoomIds) {
+      if (picks.includes(o.roomId)) out.push({ night: pd.date, roomId: o.roomId, holder: occupantName(o as OccupantLike) || null });
+    }
+  }
+  return out;
+}
+
 function occupantName(o: OccupantLike): string {
   const guest = o.guestName?.trim();
   if (guest && guest !== "Guest") return guest;
@@ -402,6 +422,7 @@ export function RoomStatusTable({
   const pinCls = (i: number) => `rst-pin${i === lastPin ? " rst-pin-edge" : ""}`;
 
   const grouped = !!nightGroups?.length;
+  const rowById = new Map(rows.map((r) => [r.roomId, r] as const));
   return (
     <div className={`rst-wrap${dense ? " dense" : ""}${large ? " large" : ""}`}>
       <table className={`rst${grouped ? " grouped" : ""}`} ref={tableRef} style={groupRowH ? ({ "--rst-gh": `${groupRowH}px` } as CSSProperties) : undefined}>
@@ -450,7 +471,14 @@ export function RoomStatusTable({
               </th>
             )}
             {nights.map((n, i) => {
-              const count = nightSel(n).length;
+              // A pick on a room another booking now holds is not a room for this night (2026-11-27).
+              const lostHere = nightSel(n).filter((id) => {
+                const r = rowById.get(id);
+                if (!r) return false;
+                const s = cellStatus(r, n).status;
+                return s !== "vacant" && s !== "deficient";
+              });
+              const count = nightSel(n).length - lostHere.length;
               const maxSelect = maxOn(n);
               const g = groupOfNight.get(n);
               const differs = !setEq(nightSel(n), g?.g.referenceIds ?? referenceIds ?? selectedIds);
@@ -470,6 +498,17 @@ export function RoomStatusTable({
                       title={full ? "every room for this night is picked" : `${left} more room${left === 1 ? "" : "s"} to pick for this night`}
                     >
                       {count}/{maxSelect} picked
+                    </span>
+                  )}
+                  {lostHere.length > 0 && (
+                    <span
+                      className="rst-nightcount short lost"
+                      role="alert"
+                      title={`Picked, but another booking holds ${lostHere.length === 1 ? "it" : "them"} now: Room ${lostHere
+                        .map((id) => rowById.get(id)?.roomNumber ?? "?")
+                        .join(", Room ")} — untick and pick another room`}
+                    >
+                      {lostHere.length} taken
                     </span>
                   )}
                   {nightTotals?.[n] ? (
@@ -530,11 +569,14 @@ export function RoomStatusTable({
              */
             const picked: string[] = [];
             const alreadyPicked: string[] = [];
+            /** Picked on nights another booking now holds — Clear drops these too. */
+            const lostPicked: string[] = [];
             const blocked: SelectAllOutcome["blocked"] = [];
             const full: string[] = [];
             for (const n of nights) {
               const { status, occ } = cellStatus(row, n);
               if (status !== "vacant" && status !== "deficient") {
+                if (nightSel(n).includes(row.roomId)) lostPicked.push(n);
                 blocked.push({ date: n, status, holder: occ ? occupantName(occ) : row.blockedReason ?? undefined });
               } else if (nightSel(n).includes(row.roomId)) {
                 alreadyPicked.push(n);
@@ -546,11 +588,11 @@ export function RoomStatusTable({
             }
             // Once every night it CAN take is taken, the job flips to undoing it — a permanently
             // inert "Select all" would be the only dead control on the row.
-            const takenAll = picked.length === 0 && alreadyPicked.length > 0;
-            const nothingToDo = picked.length === 0 && alreadyPicked.length === 0;
+            const takenAll = picked.length === 0 && alreadyPicked.length + lostPicked.length > 0;
+            const nothingToDo = picked.length === 0 && alreadyPicked.length === 0 && lostPicked.length === 0;
             /** Take (or, when already taken, release) every night this room is free on. */
             const takeFreeNights = () => {
-              const nightsToFlip = takenAll ? alreadyPicked : picked;
+              const nightsToFlip = takenAll ? [...alreadyPicked, ...lostPicked] : picked;
               nightsToFlip.forEach((n) => onToggleCell?.(row, n));
               if (!takenAll) onSelectAllNights?.(row, { picked, alreadyPicked, blocked, full });
             };
@@ -680,6 +722,27 @@ export function RoomStatusTable({
                           }}
                         >
                           {cellSel ? "Selected" : label ?? CELL_LABEL[status]}
+                        </button>
+                      </td>
+                    );
+                  }
+                  // Picked for this booking, but another booking holds the room that night now
+                  // (2026-11-27): said in the cell, and a click drops the pick.
+                  if (onToggleCell && nightSel(n).includes(row.roomId)) {
+                    const whose = occ ? occupantName(occ) : row.blockedReason ?? "another booking";
+                    return (
+                      <td key={n} className={startsGroup(n) ? "rst-gstart" : undefined} style={{ textAlign: "center" }}>
+                        <button
+                          type="button"
+                          className="rst-chip lost"
+                          disabled={disabled}
+                          title={`Picked for this booking, but ${occ ? occupantDetail(occ) : whose} — click to untick it, then pick another room`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onToggleCell(row, n);
+                          }}
+                        >
+                          {showNames && occ ? `Taken · ${occupantName(occ)}` : "Picked · taken"}
                         </button>
                       </td>
                     );

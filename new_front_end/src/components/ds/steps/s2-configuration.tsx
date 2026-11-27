@@ -49,11 +49,11 @@ import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useRoomsFollowParty } from "@/hooks/use-rooms-follow-party";
 import { RoomCountField } from "./new-inquiry-parts";
 import { listRooms } from "@/lib/api/rooms";
-import { RoomStatusTable, roomStatusRows } from "@/components/desk/workspace/room-status-table";
+import { RoomStatusTable, picksTakenByOthers, roomStatusRows } from "@/components/desk/workspace/room-status-table";
 import { currentPassConfigs } from "@/lib/desk/workspace";
 import { fmtDateTime, plural } from "@/lib/ds/format";
 import { optionSelectedRoomIds, type AvailabilityOptionSelected, type EntryDetail } from "@/types/api";
-import { Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
+import { Overlay, StepCard, Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { Help } from "@/components/ds/help";
 import { RoomCompositionPlanner } from "@/components/desk/workspace/room-compositions-board";
 import { foldNightsToRangesLabel, operativeRoomCompositions } from "@/lib/desk/party-rooms";
@@ -428,7 +428,18 @@ export function useChangeConfiguration({
   const roomsMovedByNumber = sel.currentCanon !== sel.savedCanon && (sel.currentCanon != null || sel.savedCanon != null);
   // By type the grid knows whether its counts differ from what is saved; a fitting plan is ready.
   const roomsMoved = typeMode ? !!typePicks && !typePicks.saved : roomsMovedByNumber;
-  const roomsReady = typeMode ? !!typePicks : sel.ready;
+  /**
+   * Rooms picked on nights another booking now holds them (2026-11-27): a pick holds nothing, so a
+   * room this booking picked can have been reserved since. They are not rooms for those nights.
+   */
+  const takenPicks = useMemo(
+    () => (typeMode ? [] : picksTakenByOthers(perDate, sel.effectiveByNight).filter((t) => displayNights.includes(t.night))),
+    [typeMode, perDate, sel.effectiveByNight, displayNights],
+  );
+  const takenKey = new Set(takenPicks.map((t) => `${t.night}|${t.roomId}`));
+  /** Nights holding the asked rooms, a room another booking now has not counting. */
+  const nightsReadyFree = displayNights.filter((n) => (sel.effectiveByNight[n] ?? []).filter((id) => !takenKey.has(`${n}|${id}`)).length === roomCount).length;
+  const roomsReady = typeMode ? !!typePicks : sel.ready && takenPicks.length === 0;
   const partyMoved =
     adultCount !== (entry.adultCount ?? 0) ||
     childCount !== (entry.childCount ?? 0) ||
@@ -623,6 +634,7 @@ export function useChangeConfiguration({
 
   const nothingMoved = !partyMoved && !roomsMoved && !datesMoved && !bedsMoved;
   const blocked =
+    (!typeMode && !!result && takenPicks.length > 0) ||
     nothingMoved ||
     bedsOver ||
     !checkIn ||
@@ -640,6 +652,8 @@ export function useChangeConfiguration({
   const saveReason =
               typeMode && !!result && !typePicks && !needsRepick && !needsNightPick
                 ? `Set ${plural(roomCount, "room")} for every night in the grid`
+                : !typeMode && !!result && takenPicks.length > 0
+                ? `${takenWords(takenPicks, roomNo)} — untick ${takenPicks.length === 1 ? "it" : "them"} and pick other rooms`
                 : nothingMoved
                 ? "Nothing has changed yet"
                 : bedsOver
@@ -676,24 +690,44 @@ export function useChangeConfiguration({
                         ? "Ask the house before saving rooms"
                         : undefined;
 
-  return { beds, setBeds, bedMap, bedSum, bedsMoved, bedsOver, bedTypes, entry, oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, hotelDay, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason };
+  return { takenPicks, nightsReadyFree, beds, setBeds, bedMap, bedSum, bedsMoved, bedsOver, bedTypes, entry, oldIn, oldOut, checkIn, setCheckIn, nights, setNights, nightsN, checkOut, datesMoved, startsBeforeToday, hotelDay, adults, setAdults, children, setChildren, ages, setAges, rooms, setRooms, byNumber, setByNumber, typeMode, typePicks, setTypePicks, childCount, adultCount, roomCount, agesReady, ageInputs, env, envMin, envMax, policy, answer, datesKey, result, answerOutdated, ask, catalog, configId, available, deficient, unavailable, perDate, rows, stayNights, displayNights, priorRoomIds, sel, roomNo, picked, dropped, added, roomsMoved, roomsReady, partyMoved, countMoved, pickComplete, needsRepick, needsNightPick, pickedRoomIds, pickedRoomDates, seedComps, comps, setComps, autoSeat, tableFaults, setTableFaults, tableReady, overCapacity, roomsOutOfRange, change, save, needsApproval, pending, nothingMoved, blocked, saveReason };
 }
 
 export type ChangeConfig = ReturnType<typeof useChangeConfiguration>;
 
 /** Every room by number, for one stay of the change — the table the Inquiry step uses. */
 export function RoomsByNumberPick({ c }: { c: ChangeConfig }) {
-  const { setByNumber, pickComplete, sel, displayNights, roomCount, roomsMoved, dropped, added, roomNo, rows, perDate, pending } = c;
-  return (
+  const { setByNumber, pickComplete, sel, displayNights, roomCount, roomsMoved, dropped, added, roomNo, rows, perDate, pending, takenPicks, nightsReadyFree } = c;
+  // The table over the whole window (2026-11-27, operator: "we need a full screen button for this table").
+  const [full, setFull] = useState(false);
+  const [names, setNames] = useState(false);
+  useEffect(() => {
+    if (!full) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || document.querySelector(".scrim.open")) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setFull(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      document.body.style.overflow = prev;
+    };
+  }, [full]);
+  const tally = sel.nightsDiffer || takenPicks.length
+    ? `${nightsReadyFree} of ${plural(displayNights.length, "night")} ${nightsReadyFree === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
+    : `${sel.commonPlan.length} of ${plural(roomCount, "room")} chosen`;
+  const head = (
     <>
-      <div className="row-acts" style={{ margin: "8px 0" }}>
+      <div className="row-acts" style={{ margin: "8px 0", flexWrap: "wrap" }}>
         <Button kind="quiet" compact onClick={() => setByNumber(false)}>
           Back to room types
         </Button>
         <span className={pickComplete ? "ok-ink" : "stop-ink"} style={{ fontWeight: 700 }}>
-          {sel.nightsDiffer
-            ? `${sel.nightsReady} of ${plural(displayNights.length, "night")} ${sel.nightsReady === 1 ? "has" : "have"} ${plural(roomCount, "room")}`
-            : `${sel.commonPlan.length} of ${plural(roomCount, "room")} chosen`}
+          {tally}
         </span>
         {roomsMoved ? (
           <span className="sm">
@@ -705,27 +739,86 @@ export function RoomsByNumberPick({ c }: { c: ChangeConfig }) {
         ) : (
           <span className="sm">the same rooms as now</span>
         )}
+        <span style={{ flex: 1 }} />
+        <Button kind="quiet" compact aria-pressed={names} onClick={() => setNames((v) => !v)}>
+          {names ? "Hide names" : "Show names"}
+        </Button>
+        <Button kind="quiet" compact aria-pressed={full} onClick={() => setFull((v) => !v)}>
+          {full ? "Close full screen" : "Full screen"}
+        </Button>
       </div>
-      <Tool>
-        <RoomStatusTable
-          rows={rows}
-          nights={displayNights}
-          perDate={perDate}
-          selectedIds={sel.base}
-          perNightSel={sel.effectiveByNight}
-          referenceIds={sel.commonPlan}
-          maxSelect={roomCount}
-          onToggle={sel.toggleRow}
-          onToggleCell={sel.toggleCell}
-          onSelectAllNights={sel.reportSelectAll}
-          onCappedClick={() =>
-            toast.info(`All ${plural(roomCount, "room")} are chosen — untick one first to swap it.`)
-          }
-          disabled={pending}
-        />
-      </Tool>
+      {takenPicks.length ? (
+        <p className="cfg-stop" role="alert" style={{ margin: "0 0 8px" }}>
+          {takenWords(takenPicks, roomNo)}. {takenPicks.length === 1 ? "It reads" : "They read"} <b>Picked · taken</b> in the table — untick {takenPicks.length === 1 ? "it" : "them"} and pick other rooms.
+        </p>
+      ) : null}
     </>
   );
+  const table = (
+    <Tool>
+      <RoomStatusTable
+        rows={rows}
+        nights={displayNights}
+        perDate={perDate}
+        selectedIds={sel.base}
+        perNightSel={sel.effectiveByNight}
+        referenceIds={sel.commonPlan}
+        maxSelect={roomCount}
+        onToggle={sel.toggleRow}
+        onToggleCell={sel.toggleCell}
+        onSelectAllNights={sel.reportSelectAll}
+        onCappedClick={() =>
+          toast.info(`All ${plural(roomCount, "room")} are chosen — untick one first to swap it.`)
+        }
+        disabled={pending}
+        showNames={names}
+        large={full}
+      />
+    </Tool>
+  );
+  if (full)
+    return (
+      <>
+        <p className="sm muted" style={{ margin: "8px 0" }}>
+          The rooms are open in full screen.
+        </p>
+        <Overlay>
+          <div className="fullscreen-layer">
+            <StepCard title={`The rooms · ${plural(roomCount, "room")} a night, ${plural(displayNights.length, "night")}`}>
+              {head}
+              {table}
+            </StepCard>
+          </div>
+        </Overlay>
+      </>
+    );
+  return (
+    <>
+      {head}
+      {table}
+    </>
+  );
+}
+
+/** "Room 305 on 29 Nov (Ms Praneesha Acharya) is picked here, but another booking holds it now". */
+function takenWords(taken: Array<{ night: string; roomId: string; holder: string | null }>, roomNo: (id: string) => string) {
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const day = (d: string) => `${Number(d.slice(8, 10))} ${MON[Number(d.slice(5, 7)) - 1]}`;
+  // One line per room: its nights, and whose.
+  const byRoom = new Map<string, { nights: string[]; holder: string | null }>();
+  for (const t of taken) {
+    const x = byRoom.get(t.roomId) ?? { nights: [], holder: t.holder };
+    x.nights.push(t.night);
+    byRoom.set(t.roomId, x);
+  }
+  const parts = [...byRoom].map(([id, x]) => {
+    const ns = x.nights.sort();
+    const when = ns.length <= 2 ? ns.map(day).join(" and ") : `${day(ns[0])} and ${ns.length - 1} more nights`;
+    return `Room ${roomNo(id)} on ${when}${x.holder ? ` (${x.holder})` : ""}`;
+  });
+  const shown = parts.slice(0, 3).join("; ");
+  const more = parts.length > 3 ? `; and ${parts.length - 3} more room${parts.length - 3 === 1 ? "" : "s"}` : "";
+  return `${shown}${more} ${parts.length === 1 && taken.length === 1 ? "is" : "are"} picked here, but another booking holds ${taken.length === 1 ? "it" : "them"} now`;
 }
 
 export function ChangeConfiguration({

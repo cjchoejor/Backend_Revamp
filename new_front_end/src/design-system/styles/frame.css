@@ -301,7 +301,9 @@
 .ds .btn.working .spin:not(.desk-root *) { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 /* "Change configuration" (2026-09-30) — the rooms and the party, changed at Negotiation. It
    takes over its card, so it reads as a short numbered form rather than a second panel. */
-.ds .cfg-change:not(.desk-root *) { display: grid; gap: var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s4); background: var(--surface-2); }
+/* One column that may shrink (2026-11-27, operator: the fields, the rooms table and the save ran under the
+   booking file): an implicit grid column takes the widest child's own width — the rooms table's. */
+.ds .cfg-change:not(.desk-root *) { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: var(--s4); border: 1px solid var(--line-2); border-radius: var(--r-card); padding: var(--s4); background: var(--surface-2); }
 .ds .cfg-head:not(.desk-root *) { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s3); }
 .ds .cfg-n:not(.desk-root *) { display: block; font-size: var(--t-sm); color: var(--ink-2); letter-spacing: .02em; }
 .ds .cfg-change section:not(.desk-root *) { display: block; }
