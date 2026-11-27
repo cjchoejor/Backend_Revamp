@@ -7,7 +7,7 @@ import { applyRoomFlagRepairs, planRoomFlagRepairs } from "../../lib/room-flag-r
 import { currentReservationOnly, foldIsoNightsToRanges, stillHoldsInventory } from "../../lib/entry-inventory-claim.js";
 import { resolveCompositionBasis } from "../../lib/party-seating.js";
 import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
-import type { ToleratedClaim } from "../../lib/room-move-claims.js";
+import { LIVE_LEG, type ToleratedClaim } from "../../lib/room-move-claims.js";
 import { changeRoomToNewSegment, roomChangeNights, type RoomChangeOutcome, type RoomMoveWalkContext } from "./room-change-service.js";
 import { buildQuotationPreview } from "./quotation-preview-service.js";
 import type { RoomCompositionServiceInput } from "./s2-quotation-service.js";
@@ -1100,6 +1100,42 @@ async function roomNumbers(prisma: PrismaClient, ids: string[]): Promise<Map<str
   return new Map(rows.map((r) => [r.id, r.roomNumber]));
 }
 
+/**
+ * A move still open (running or part-done) whose bookings have all ended — cancelled, lapsed, closed
+ * or a no-show — is closed (2026-11-27, found on the hotel's server: MOVE-20261126-0012 stopped at
+ * 702 → 503, its booking was cancelled, and the move went on refusing every later move of Room 702).
+ * Its unfinished legs give up their claim (CANCELLED) and the move reads COMPLETED, as the FOM's own
+ * "Close the move" leaves it; the note and History say why. Nothing on any booking changes.
+ */
+export async function closeMovesWithNoLiveBooking(prisma: PrismaClient, actor: Actor): Promise<string[]> {
+  const stale = await prisma.roomMove.findMany({
+    where: { status: { in: [...ACTIVE_MOVE] }, legs: { none: LIVE_LEG } },
+    select: { id: true, legs: { select: { id: true, entryId: true, status: true } } },
+  });
+  for (const m of stale) {
+    await prisma.$transaction(async (tx) => {
+      await tx.roomMoveLeg.updateMany({
+        where: { moveId: m.id, status: { in: ["PLANNED", "STOPPED", "REFUSED"] } },
+        data: { status: "CANCELLED", finishedAt: new Date() },
+      });
+      const row = await tx.roomMove.findUniqueOrThrow({ where: { id: m.id }, select: { notes: true } });
+      const notes = Array.isArray(row.notes) ? (row.notes as unknown[]) : [];
+      await tx.roomMove.update({
+        where: { id: m.id },
+        data: {
+          status: "COMPLETED",
+          completedAt: new Date(),
+          notes: [...notes, { at: new Date().toISOString(), kind: "CLOSED_BOOKINGS_ENDED", by: actor.actorId }] as Prisma.InputJsonValue,
+        },
+      });
+      for (const entryId of [...new Set(m.legs.map((l) => l.entryId))]) {
+        await trace(tx, actor, "ROOM_MOVE.CLOSED_BOOKINGS_ENDED", entryId, null, { moveId: m.id, legsCancelled: m.legs.filter((l) => ["PLANNED", "STOPPED", "REFUSED"].includes(l.status)).length });
+      }
+    });
+  }
+  return stale.map((m) => m.id);
+}
+
 async function appendNote(prisma: PrismaClient, moveId: string, note: Record<string, unknown>) {
   const m = await prisma.roomMove.findUniqueOrThrow({ where: { id: moveId }, select: { notes: true } });
   const notes = Array.isArray(m.notes) ? (m.notes as unknown[]) : [];
@@ -1394,6 +1430,7 @@ export async function executeRoomMove(
   // machine never moves back — so they move only once every other side is safely done.
   const ordered = [...preview.legs].sort((a, b) => Number(IN_HOUSE.has(a.stage)) - Number(IN_HOUSE.has(b.stage)) || a.order - b.order);
 
+  await closeMovesWithNoLiveBooking(prisma, actor);
   const now = new Date();
   const moveId = await prisma.$transaction(async (tx) => {
     // One move at a time is created; once it exists, its claims and the "already part of a move"
@@ -1404,6 +1441,7 @@ export async function executeRoomMove(
     const clash = await tx.roomMoveLeg.findFirst({
       where: {
         move: { status: { in: [...ACTIVE_MOVE] } },
+        ...LIVE_LEG,
         OR: [{ entryId: { in: entryIds } }, { fromRoomId: { in: roomIds } }, { toRoomId: { in: roomIds } }],
       },
       select: { moveId: true },

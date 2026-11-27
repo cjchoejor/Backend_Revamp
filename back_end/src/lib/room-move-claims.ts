@@ -1,5 +1,5 @@
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { foldIsoNightsToRanges } from "./entry-inventory-claim.js";
+import { foldIsoNightsToRanges, stillHoldsInventory } from "./entry-inventory-claim.js";
 
 /**
  * A ROOM MOVE AS A CLAIM (2026-10-12) — the one rule every "is this room taken?" reader applies
@@ -33,6 +33,13 @@ import { foldIsoNightsToRanges } from "./entry-inventory-claim.js";
  */
 
 const ACTIVE_MOVE = ["IN_PROGRESS", "PARTIAL"] as const;
+/**
+ * A leg counts only while its booking still holds rooms (2026-11-27, found on the hotel's server:
+ * MOVE-20261126-0012 stopped part-way, its booking was then cancelled, and the move went on holding
+ * Room 702 and refusing every later move of it). A cancelled, lapsed, closed or no-show booking's
+ * leg claims nothing and blocks nothing.
+ */
+export const LIVE_LEG = { entry: stillHoldsInventory } satisfies Prisma.RoomMoveLegWhereInput;
 /** Legs whose claim stands: not yet run, run, stopped part-way, or refused and waiting for a retry. */
 const CLAIMING_LEG = new Set(["PLANNED", "DONE", "STOPPED", "REFUSED"]);
 
@@ -64,7 +71,7 @@ type ActiveLeg = {
 
 async function activeLegs(db: Db): Promise<ActiveLeg[]> {
   return db.roomMoveLeg.findMany({
-    where: { move: { status: { in: [...ACTIVE_MOVE] } } },
+    where: { move: { status: { in: [...ACTIVE_MOVE] } }, ...LIVE_LEG },
     select: {
       id: true,
       moveId: true,
