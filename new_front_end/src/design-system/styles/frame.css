@@ -817,7 +817,11 @@
 .ds .bbox-rno span { font-size: 11.5px; color: var(--ink-3); }
 .ds .bbox-rno:hover { border-color: var(--accent); }
 .ds .bbox-rno.on { background: var(--accent-soft); border-color: var(--accent); }
-.ds .bbox-cell { width: 56px; height: 30px; font: inherit; font-size: 15px; font-weight: 800; color: #fff; border: 1.5px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ds .bbox-cell { width: 56px; height: 30px; font: inherit; font-size: 13px; font-weight: 700; color: var(--ink-2); display: inline-flex; align-items: center; justify-content: center; gap: 5px; border: 1.5px solid var(--line-2); border-radius: 6px; background: var(--surface); cursor: pointer; }
+/* The guests in the room that night (2026-11-27): a small person and the count. */
+.ds .bbox-n { display: inline-flex; align-items: center; gap: 2px; font-variant-numeric: tabular-nums; }
+.ds .bbox-person { width: 10px; height: 10px; fill: currentColor; opacity: .75; }
+.ds .bbox-tick { font-size: 13px; font-weight: 800; }
 .ds .bbox-cell:hover { border-color: var(--accent); }
 .ds .bbox-grid .bbox-cell.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 .ds .bbox-none { color: var(--ink-3); }

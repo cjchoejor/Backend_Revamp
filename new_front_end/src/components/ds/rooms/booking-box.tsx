@@ -22,7 +22,9 @@ import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
 import { DsDialog } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
-import { getRoomChart, type ChartBarKind, type RoomChartBooking } from "@/lib/api/rooms";
+import { getEntry } from "@/lib/api/entries";
+import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBooking } from "@/lib/api/rooms";
+import { operativeRoomCompositions } from "@/lib/desk/party-rooms";
 import type { DateMoveInput, RoomMoveLegInput } from "@/lib/api/room-moves";
 import { fmtRange } from "@/lib/ds/format";
 import { rowNameOf } from "@/lib/ds/status";
@@ -39,6 +41,23 @@ const MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "O
 const longDay = (ymd: string) => `${WEEKDAY[new Date(`${ymd}T00:00:00Z`).getUTCDay()]} ${Number(ymd.slice(8, 10))} ${MONTH[Number(ymd.slice(5, 7)) - 1]}`;
 const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`;
 const roomsWords = (nos: string[]) => (nos.length === 1 ? `Room ${nos[0]}` : `Rooms ${nos.join(" + ")}`);
+/** "29 Nov", "29 Nov and 1 Dec", "29 Nov, 1 Dec and 2 more". */
+const daysWords = (ds: string[]) => {
+  const w = [...ds].sort().map((d) => `${Number(d.slice(8, 10))} ${MONTH[Number(d.slice(5, 7)) - 1]}`);
+  if (w.length <= 2) return w.join(" and ");
+  return `${w[0]}, ${w[1]} and ${w.length - 2} more`;
+};
+const overlaps = (a: string[], b: string[]) => a.some((d) => b.includes(d));
+
+/** A small person, before a room's guest count. */
+function Person() {
+  return (
+    <svg className="bbox-person" viewBox="0 0 12 12" aria-hidden="true">
+      <circle cx="6" cy="3.6" r="2.3" />
+      <path d="M1.6 11.4c0-2.6 2-4.5 4.4-4.5s4.4 1.9 4.4 4.5z" />
+    </svg>
+  );
+}
 
 /** What the box hands the chart: a move to show, or picks to mark for dragging. */
 export type BoxMove =
@@ -94,6 +113,27 @@ export function BookingBox({
   const typeName = useMemo(() => new Map((chart?.roomTypes ?? []).map((t) => [t.id, t.name])), [chart]);
   const no = (id: string) => roomById.get(id)?.roomNumber ?? "?";
 
+  // How many guests sleep in each room (2026-11-27, operator: "the boxes … can show the number of
+  // occupants in it"). The booking's own seating, counts only — one record a room, so the same on
+  // every night it is held.
+  const entryQ = useQuery({
+    queryKey: ["entry", booking.entryId],
+    queryFn: () => getEntry(session!, booking.entryId),
+    enabled: !!session,
+  });
+  const guestsIn = useMemo(() => {
+    const m = new Map<string, { n: number; words: string; key: string }>();
+    for (const c of (entryQ.data ? operativeRoomCompositions(entryQ.data) : null) ?? []) {
+      const a = c.adultCount ?? 0;
+      const k6 = c.cnb6To10Count ?? 0;
+      const k0 = c.cnbUnder6Count ?? 0;
+      const kids = k6 + k0;
+      const parts = [a ? plural(a, "adult") : null, kids ? (kids === 1 ? "1 child" : `${kids} children`) : null].filter(Boolean);
+      m.set(c.roomId, { n: a + kids, words: parts.join(" and ") || "nobody", key: `${a}|${k6}|${k0}` });
+    }
+    return m;
+  }, [entryQ.data]);
+
   const [ticked, setTicked] = useState<Map<string, Set<string>>>(new Map());
   const [newFirst, setNewFirst] = useState("");
   const [targets, setTargets] = useState<Record<string, string>>({});
@@ -121,23 +161,80 @@ export function BookingBox({
   const tickedCount = tickedRooms.reduce((s, r) => s + r.nights.length, 0);
   const days = firstNight && newFirst ? daysBetween(firstNight, newFirst) : 0;
   const toOf = (r: string) => targets[r] || r;
+  // The nights a ticked room lands on, and the chart over them when they leave the stay.
+  const lastTicked = tickedRooms.length ? tickedRooms.flatMap((t) => t.nights).sort().slice(-1)[0] : null;
+  const landFrom = days && firstNight ? shift(firstNight, days) : null;
+  const landLen = landFrom && firstNight && lastTicked ? Math.max(1, Math.min(62, daysBetween(firstNight, lastTicked) + 1)) : 1;
+  const landQ = useQuery({
+    queryKey: ["room-chart", "box-landing", booking.entryId, landFrom, landLen],
+    queryFn: () => getRoomChart(session!, { from: landFrom!, nights: landLen }),
+    enabled: !!session && !!landFrom,
+    staleTime: 0,
+  });
   /** A room the booking holds on every night of its stay, ticked on all of them. */
   const wholeStayRoom = (r: string) => heldNights(r).length === nights.length && (ticked.get(r)?.size ?? 0) === heldNights(r).length;
   const allWhole = tickedRooms.length > 0 && tickedRooms.every((t) => wholeStayRoom(t.roomId));
   const everyRoom = allWhole && tickedRooms.length === rooms.length;
   const moves = days !== 0 || tickedRooms.some((t) => toOf(t.roomId) !== t.roomId);
+  /** Single nights move as the night move does: it refuses a room another booking holds. */
+  const nightMove = !allWhole;
+  const landingOf = (t: { nights: string[] }) => t.nights.map((n) => shift(n, days));
+  const charts = [chart, days ? (landQ.data ?? null) : null].filter((c): c is RoomChart => !!c);
+  /** Another booking on the room on any of these nights, or the room out of order — read off the chart. */
+  const blockerOn = (roomId: string, dates: string[]): { words: string; outOfOrder: boolean } | null => {
+    for (const c of charts) {
+      for (const b of c.bars) {
+        if (b.roomId !== roomId || b.entryId === booking.entryId || b.kind === "CHECKED_OUT") continue;
+        const hit = dates.filter((d) => d >= b.from && d < b.to);
+        if (!hit.length) continue;
+        const bk = c.bookings.find((x) => x.entryId === b.entryId);
+        return { words: `${bk ? rowNameOf(bk) : "another booking"}'s on ${daysWords(hit)}`, outOfOrder: false };
+      }
+      const room = c.rooms.find((r) => r.id === roomId);
+      const down = dates.filter((d) => {
+        const i = c.nights.indexOf(d);
+        return i >= 0 && !!room?.outOfOrder?.nights[i];
+      });
+      if (down.length) return { words: `out of order on ${daysWords(down)}`, outOfOrder: true };
+    }
+    return null;
+  };
+  /** Nights this booking keeps in the room — not freed by a ticked night moving away. */
+  const keptOn = (roomId: string, dates: string[]) => dates.filter((d) => held.get(roomId)?.has(d) && !(isTicked(roomId, d) && (days !== 0 || toOf(roomId) !== roomId)));
+  /**
+   * Why a ticked room cannot go to `id`, or null. One room may take several rooms' nights when the
+   * nights do not meet (2026-11-27, operator: "if room number is chosen it shouldn't be able to be
+   * selected again, but if its for different date or date range it should be allowable").
+   */
+  const targetWhy = (t: { roomId: string; roomNumber: string; nights: string[] }, id: string): { words: string; shut: boolean } | null => {
+    if (id === t.roomId && days === 0) return null;
+    const land = landingOf(t);
+    const other = tickedRooms.find((o) => o.roomId !== t.roomId && toOf(o.roomId) === id && (toOf(o.roomId) !== o.roomId || days !== 0) && overlaps(landingOf(o), land));
+    if (other) return { words: `Room ${other.roomNumber} goes here on ${daysWords(landingOf(other).filter((d) => land.includes(d)))}`, shut: true };
+    const block = blockerOn(id, land);
+    // A whole room on the same dates swaps with the booking in its way: it takes the room left behind.
+    if (block) return { words: !block.outOfOrder && !nightMove && days === 0 ? `${block.words} — they would take Room ${t.roomNumber}` : block.words, shut: block.outOfOrder || nightMove };
+    if (nightMove) {
+      const kept = keptOn(id, land);
+      if (kept.length) return { words: `this booking's room on ${daysWords(kept)}`, shut: true };
+      // A room of the booking on other nights takes these nights into its record — only with the same guests.
+      if (days === 0 && id !== t.roomId && (held.get(id)?.size ?? 0) > 0) {
+        const into = guestsIn.get(id);
+        const from = guestsIn.get(t.roomId);
+        if (into && from && into.key !== from.key) return { words: `this booking's room for ${into.words} on other nights`, shut: true };
+      }
+    }
+    return null;
+  };
 
   const why = !tickedRooms.length
     ? "Tick the nights to move, or a room's number for all its nights"
     : !moves
       ? "Choose a new first night, or another room"
       : (() => {
-          const seen = new Map<string, string>();
           for (const t of tickedRooms) {
-            const to = toOf(t.roomId);
-            if (to === t.roomId) continue;
-            if (seen.has(to)) return `Rooms ${seen.get(to)} and ${t.roomNumber} cannot both go to Room ${no(to)} — pick another room for one`;
-            seen.set(to, t.roomNumber);
+            const w = targetWhy(t, toOf(t.roomId));
+            if (w?.shut) return `Room ${t.roomNumber} cannot go to Room ${no(toOf(t.roomId))}: ${w.words} — pick another room`;
           }
           return null;
         })();
@@ -298,10 +395,17 @@ export function BookingBox({
                               type="button"
                               className={`bbox-cell${isTicked(r, n) ? " on" : ""}`}
                               aria-pressed={isTicked(r, n)}
-                              aria-label={`Room ${no(r)} on ${longDay(n)}`}
+                              aria-label={`Room ${no(r)} on ${longDay(n)}${guestsIn.get(r) ? `, ${guestsIn.get(r)!.words}` : ""}`}
+                              title={guestsIn.get(r) ? `${guestsIn.get(r)!.words} in Room ${no(r)} on ${longDay(n)}` : undefined}
                               onClick={() => setNights(r, [n], !isTicked(r, n))}
                             >
-                              {isTicked(r, n) ? "✓" : ""}
+                              {isTicked(r, n) ? <span className="bbox-tick">✓</span> : null}
+                              {guestsIn.get(r) ? (
+                                <span className="bbox-n">
+                                  <Person />
+                                  {guestsIn.get(r)!.n}
+                                </span>
+                              ) : null}
                             </button>
                           </td>
                         ) : (
@@ -341,12 +445,13 @@ export function BookingBox({
                       {otherRooms.map((g) => (
                         <optgroup key={g.name} label={g.name}>
                           {g.ids.map((id) => {
-                            // A room another ticked room already goes to is not offered twice (2026-11-26).
-                            const goesHere = id !== t.roomId ? tickedRooms.find((o) => o.roomId !== t.roomId && toOf(o.roomId) === id && toOf(o.roomId) !== o.roomId) : undefined;
+                            const w = targetWhy(t, id);
+                            const own = id === t.roomId;
                             return (
-                              <option key={id} value={id} disabled={!!goesHere}>
+                              <option key={id} value={id} disabled={!!w?.shut && !own}>
                                 {no(id)}
-                                {id === t.roomId ? " · stays in this room" : goesHere ? ` · Room ${goesHere.roomNumber} goes here` : ""}
+                                {own ? " · stays in this room" : ""}
+                                {w ? ` · ${w.words}` : ""}
                               </option>
                             );
                           })}
