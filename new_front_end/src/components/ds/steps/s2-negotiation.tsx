@@ -371,7 +371,10 @@ export function S2Negotiation({
           .map((c) => `Stay ${together.stayNoOf(o.id)} · ${c.label.charAt(0).toLowerCase()}${c.label.slice(1)}`),
       )
     : [];
-  const openKey = [...(unsavedItem ? [unsavedItem] : []), ...othersOpen, ...(together.active ? othersUnsaved : [])].join("|");
+  // The apartment's list typed and not saved holds the move too (2026-11-27).
+  const [listsUnsaved, setListsUnsaved] = useState<string[]>([]);
+  const listItems = listsUnsaved.map((label) => `Apartment ${label}'s list saved, or undone`);
+  const openKey = [...(unsavedItem ? [unsavedItem] : []), ...listItems, ...othersOpen, ...(together.active ? othersUnsaved : [])].join("|");
   useEffect(() => {
     onOpenItems?.(openKey ? openKey.split("|") : []);
   }, [openKey, onOpenItems]);
@@ -706,7 +709,7 @@ export function S2Negotiation({
       </StepCard>
 
       {/* An apartment booking: what the apartment holds, with counts, not priced (2026-11-27). */}
-      {!together.active ? <ApartmentAmenitiesCard entry={entry} /> : null}
+      {!together.active ? <ApartmentAmenitiesCard entry={entry} onUnsavedChange={setListsUnsaved} /> : null}
 
       {/* The live quotation sits directly under the table that priced it (2026-09-30, operator).
           It used to be below the quote and the marker, pages away from the grid whose Save mints

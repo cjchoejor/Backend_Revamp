@@ -114,7 +114,7 @@ export function PickBill({
         </span>
         <span className="pb-sub">
           {pricing.rent?.length
-            ? `let ${pricing.rent[0].plan === "MONTHLY" ? "monthly" : "weekly"} · ${plural(pricing.stayNights, "night")} · incl. ${pct(pricing.serviceChargeRate)} service charge + ${pct(pricing.gstRate)} GST · room only`
+            ? `${pricing.rent[0].plan === "MONTHLY" ? "monthly" : "weekly"} rent · ${plural(pricing.stayNights, "night")} · incl. ${pct(pricing.serviceChargeRate)} service charge + ${pct(pricing.gstRate)} GST · room only`
             : `${plural(t.roomNights, "room-night")} · ${plural(pricing.nights.length, "night")} · incl. ${pct(pricing.serviceChargeRate)} service charge + ${pct(pricing.gstRate)} GST · room only · ${basisWords(pricing)}`}
         </span>
       </div>
@@ -129,7 +129,7 @@ export function PickBill({
                     Apartment {a.unitLabel} · {a.packageName}
                   </b>
                   {a.roomNumbers.length > 1 ? <span className="meta"> · Rooms {a.roomNumbers.join(" + ")}</span> : null}
-                  <span className="meta"> · let {a.plan === "MONTHLY" ? "monthly" : "weekly"}</span>
+                  <span className="meta"> · {a.plan === "MONTHLY" ? "monthly" : "weekly"} rent</span>
                 </td>
               </tr>
               {a.periods.map((p) => (

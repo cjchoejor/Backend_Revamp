@@ -902,7 +902,9 @@ function HowSettled({
   // Paid in full before Check-out — by the advance, a mid-stay payment — leaves nothing to take:
   // the card says so and closes the bill with no money (2026-11-12, operator: "if payment is fully
   // done, then it should show payment is done, nothing is owed"). The server's balance decides.
-  const paidInFull = balance != null && balanceNum <= 0 && guestPays && !(folio?.billingModel && ON_ACCOUNT_MODELS.has(folio.billingModel));
+  // Whoever pays (2026-11-27, found on the hotel's ENT-20261127-0006: an agency's bill at nil, the guest
+  // left the same evening, offered only "the agent's voucher" for Nu 0.00 with Settle shut).
+  const paidInFull = balance != null && balanceNum <= 0;
   const partial = guestPays && !paidInFull && Number.isFinite(typed) && typed >= 0 && balanceNum > 0 && typed < balanceNum;
   const creditCovers = partial && creditActive && ps?.ceilingAmount != null && ps.ceilingAmount >= balanceNum - typed;
   const partialLocked = partial && !fom && !creditCovers;
@@ -937,7 +939,8 @@ function HowSettled({
       if (takesMoney) Object.assign(body, bank.body(method));
       if (method === "VOUCHER") {
         // The backend requires what the voucher covers; anything it leaves is invoiced to the agency.
-        if (voucherValid) body.voucherAmount = voucherTyped;
+        // A bill at nil closes with no voucher: nothing is recorded and nothing is invoiced.
+        body.voucherAmount = voucherValid ? voucherTyped : 0;
       } else if (guestPays && !paidInFull && Number.isFinite(typed) && typed >= 0) {
         // Zero is a real answer: the guest pays nothing now and the balance leaves on credit.
         // The amount is always typed (it starts at the balance); a direct bill takes no money at
@@ -1017,7 +1020,7 @@ function HowSettled({
       ? "a part-payment needs the FOM or a credit extension"
       : !folio?.billingModel
         ? "the bill has no billing model"
-        : method === "VOUCHER" && !voucherValid
+        : method === "VOUCHER" && !voucherValid && !paidInFull
           ? "put in what the voucher covers"
           : paidWait
             ? paidWait
@@ -1130,7 +1133,7 @@ function HowSettled({
             </Fact>
             <Fact k="Received">{fin.advanceReceived != null ? <span className="money">{money(fin.advanceReceived, cur)}</span> : null}</Fact>
             <Fact k="Still owed">{balance != null ? <b className="money">{money(balance, cur)}</b> : null}</Fact>
-            {chargedToAccount ? <Fact k="The guest">pays nothing at the desk — the balance is invoiced to {booked.payer}</Fact> : null}
+            {chargedToAccount && !paidInFull ? <Fact k="The guest">pays nothing at the desk — the balance is invoiced to {booked.payer}</Fact> : null}
           </Facts>
 
           {creditActive ? (
@@ -1155,11 +1158,20 @@ function HowSettled({
                   ✓
                 </span>
                 <span>
-                  <b>Paid in full — nothing is owed.</b>{" "}
-                  <span className="rest">
-                    {money(fin.advanceReceived, cur)} received against a bill of {money(billing.data?.folio?.chargeBreakdown?.total ?? null, cur)}. Closing the bill takes no money; it
-                    releases the rooms to housekeeping.
-                  </span>
+                  {Number(billing.data?.folio?.chargeBreakdown?.total ?? 0) === 0 ? (
+                    <>
+                      <b>Nothing is owed — nothing was charged.</b>{" "}
+                      <span className="rest">Closing the bill takes no money and sends no invoice; it releases the rooms to housekeeping.</span>
+                    </>
+                  ) : (
+                    <>
+                      <b>Paid in full — nothing is owed.</b>{" "}
+                      <span className="rest">
+                        {money(fin.advanceReceived, cur)} received against a bill of {money(billing.data?.folio?.chargeBreakdown?.total ?? null, cur)}. Closing the bill takes no money; it
+                        releases the rooms to housekeeping.
+                      </span>
+                    </>
+                  )}
                 </span>
               </div>
             ) : (

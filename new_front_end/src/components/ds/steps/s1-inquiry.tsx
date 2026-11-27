@@ -748,7 +748,7 @@ function TheStay({
             ? <>, {plural(parseInt(saved.children, 10) || 0, "child", "children")}{saved.ages.length ? ` (${saved.ages.join(", ")})` : ""}</>
             : null}{" "}
           · {form.isApartment
-            ? `${saved.apts ? plural(Number(saved.apts), "apartment") : "apartments not said"}${saved.plan ? ` · let ${PLAN_WORD[saved.plan as ApartmentPlan].toLowerCase()}` : ""}`
+            ? `${saved.apts ? plural(Number(saved.apts), "apartment") : "apartments not said"}${saved.plan ? ` · ${PLAN_WORD[saved.plan as ApartmentPlan].toLowerCase()} rent` : ""}`
             : plural(parseInt(saved.rooms, 10) || 1, "room")}
           {Object.keys(savedBedMap).length
             ? <> · {Object.entries(savedBedMap).map(([t, n]) => `${n} ${BED_WORD[t] ?? words(t)}`).join(" + ")} asked</>

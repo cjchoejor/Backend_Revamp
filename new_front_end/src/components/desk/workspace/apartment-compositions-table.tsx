@@ -410,7 +410,7 @@ export function ApartmentCompositionsTable({
                   <td className="apt-name">
                     <b>Apartment {a.label}</b>
                     <span className="apt-sub">
-                      {a.packageName} · let {a.plan === "MONTHLY" ? "monthly" : "weekly"}
+                      {a.packageName} · {a.plan === "MONTHLY" ? "monthly" : "weekly"} rent
                     </span>
                     {a.roomNumbers.length > 1 && <span className="apt-sub">Rooms {a.roomNumbers.join(" + ")}</span>}
                   </td>

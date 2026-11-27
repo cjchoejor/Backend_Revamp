@@ -368,7 +368,7 @@ function RateReferenceView({
             <b>
               Apartment {a.label} · {a.packageName}
             </b>
-            {a.roomNumbers.length > 1 ? ` · Rooms ${a.roomNumbers.join(" + ")}` : ""} · let {a.plan === "MONTHLY" ? "monthly" : "weekly"} at{" "}
+            {a.roomNumbers.length > 1 ? ` · Rooms ${a.roomNumbers.join(" + ")}` : ""} · {a.plan === "MONTHLY" ? "monthly" : "weekly"} rent at{" "}
             <b className="mono">{moneyOrDash(a.rent.total, ref.currency)}</b> a {a.plan === "MONTHLY" ? "month" : "week"} with service charge and GST{" "}
             <span style={MUTED}>({moneyOrDash(a.rent.rate, ref.currency)} without)</span> — no extra bed.
           </div>

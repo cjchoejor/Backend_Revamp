@@ -2431,7 +2431,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                               <b>Stay {together.active ? together.stayNoOf(e.id) : tripAtInquiry.stayNoOf(e.id)}</b>
                               <StayDates checkIn={e.checkInDate} checkOut={e.checkOutDate} />
                               <span className="fstay-n">
-                                {n ? plural(n, "night") : "No dates yet"} ·{" "}
+                                {n ? plural(n, "night") : e.checkInDate && e.checkOutDate ? "No night" : "No dates yet"} ·{" "}
                                 {e.useType === "APARTMENT"
                                   ? e.apartmentCount
                                     ? plural(e.apartmentCount, "apartment")
@@ -2453,7 +2453,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                       <StayDates checkIn={entry.checkInDate} checkOut={co} />
                       <div className="ffacts-line">
                         <span>
-                          <b>{nights ? plural(nights, "night") : "No dates yet"}</b>
+                          {/* Left early with no night slept (2026-11-27): the dates are there, the nights are none. */}
+                          <b>{nights ? plural(nights, "night") : entry.checkInDate && co ? "No night slept" : "No dates yet"}</b>
                         </span>
                         <span>
                           {/* An apartment stay counts its apartments, a 2 BHK one (2026-11-25). */}

@@ -9,7 +9,7 @@
  * or typed under Others. It starts from the package's usual list and is kept for this booking once
  * saved. Nothing here is priced; the quotation and the confirmation voucher print it.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
@@ -32,6 +32,7 @@ function UnitList({
   editable,
   onSave,
   saving,
+  onUnsaved,
 }: {
   label: string;
   packageName: string;
@@ -42,6 +43,8 @@ function UnitList({
   editable: boolean;
   onSave: (items: AmenityItem[]) => void;
   saving: boolean;
+  /** Says when this list holds a change not saved, so the step can wait for it (2026-11-27). */
+  onUnsaved?: (label: string, unsaved: boolean) => void;
 }) {
   const [items, setItems] = useState<AmenityItem[]>(saved);
   const savedKey = canon(saved);
@@ -51,6 +54,12 @@ function UnitList({
   const [other, setOther] = useState("");
   const [count, setCount] = useState("1");
   const changed = canon(items) !== savedKey || (source !== "BOOKING" && items.length > 0);
+  // A change typed and not saved (or undone): the package's usual list kept as it is is not one.
+  const edited = canon(items) !== savedKey;
+  useEffect(() => {
+    onUnsaved?.(label, edited);
+  }, [label, edited]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onUnsaved?.(label, false), [label]); // eslint-disable-line react-hooks/exhaustive-deps
   const onList = new Set(items.map((i) => i.name.toLowerCase()));
   const offered = known.filter((k) => !onList.has(k.toLowerCase()));
   const name = pick === OTHERS ? other.replace(/\s+/g, " ").trim() : pick;
@@ -188,7 +197,17 @@ function UnitList({
 }
 
 /** The card: every apartment of the booking, each with its list. Nothing on a booking with no apartment. */
-export function ApartmentAmenitiesCard({ entry, title = "In the apartment" }: { entry: EntryDetail; title?: string }) {
+export function ApartmentAmenitiesCard({
+  entry,
+  title = "In the apartment",
+  onUnsavedChange,
+}: {
+  entry: EntryDetail;
+  title?: string;
+  /** The apartments whose list holds a change not saved — the step waits for them (2026-11-27, operator:
+   *  "without saving the list edited, or undoing, the move to set up shouldn't appear"). */
+  onUnsavedChange?: (labels: string[]) => void;
+}) {
   const { session } = useSession();
   const qc = useQueryClient();
   const isApartment = String(entry.useType ?? "") === "APARTMENT";
@@ -207,6 +226,15 @@ export function ApartmentAmenitiesCard({ entry, title = "In the apartment" }: { 
     onError: (e) => toastRefusal(e, "The list could not be saved"),
   });
   const units = useMemo(() => q.data?.units ?? [], [q.data]);
+  const [unsaved, setUnsaved] = useState<string[]>([]);
+  const markUnsaved = useCallback((label: string, on: boolean) => {
+    setUnsaved((prev) => (on ? (prev.includes(label) ? prev : [...prev, label]) : prev.filter((x) => x !== label)));
+  }, []);
+  const unsavedKey = unsaved.slice().sort().join("|");
+  useEffect(() => {
+    onUnsavedChange?.(unsavedKey ? unsavedKey.split("|") : []);
+  }, [unsavedKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => onUnsavedChange?.([]), []); // eslint-disable-line react-hooks/exhaustive-deps
   if (!isApartment || !units.length) return null;
   return (
     <StepCard
@@ -234,6 +262,7 @@ export function ApartmentAmenitiesCard({ entry, title = "In the apartment" }: { 
           editable={!!q.data?.editable}
           saving={save.isPending && save.variables?.unitId === u.unitId}
           onSave={(items) => save.mutate({ unitId: u.unitId, items })}
+          onUnsaved={markUnsaved}
         />
       ))}
     </StepCard>
