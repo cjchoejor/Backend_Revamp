@@ -19,6 +19,7 @@
  *  - `RoomsEditPane`: Add a room · Remove a room, as sub-tabs.
  */
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -1305,6 +1306,7 @@ function AddedResult({ done, onAgain }: { done: AddRoomsOutcome; onAgain: () => 
 
 export function AddRoom({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
+  const router = useRouter();
   const refresh = useRefreshEntry(entry.id);
   const qc = useQueryClient();
   const phoneRules = usePhoneRules();
@@ -1495,7 +1497,6 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
       }),
     onSuccess: (o) => {
       setConfirming(false);
-      setDone(o);
       setD(EMPTY_ADD);
       try {
         for (const sh of shapes) window.localStorage.removeItem(`desk:rcomp:add-room:${entry.id}:${sh.day}`);
@@ -1504,9 +1505,33 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
       }
       refresh([["add-room-preview", entry.id], ["identity-proofs", entry.id], ["billing-summary", entry.id], ["held-documents", entry.id]]);
       const made = o.bookings.filter((b) => b.entryId);
-      if (o.joined) toast.success(`${roomsWord(o.joined.roomNumbers)} added to the booking`);
-      if (made.length) toast.success(`${made.length === 1 ? "A booking" : `${made.length} bookings`} of their own made on this enquiry`);
-      for (const b of o.bookings) if (b.failed) toast.warning(b.failed);
+      if (o.joined) toast.success(`${roomsWord(o.joined.roomNumbers)} added to this booking`);
+      for (const b of o.bookings) if (b.failed) toast.warning(b.failed, { duration: 12000 });
+      for (const b of made) {
+        if (b.blocked) toast.warning(`${roomsWord(b.roomNumbers)} for ${b.guestName ?? "the guest"} stopped at ${b.blocked.atStep.toLowerCase().replace(/_/g, " ")}: ${b.blocked.message}`, { duration: 12000 });
+      }
+      // The friends' booking opens at once (2026-11-27, operator: "after adding room can it directly take
+      // it to that entry's page"). With several, the first opens and the others are named; each is a stay
+      // in the booking's header.
+      if (made.length) {
+        const [first, ...others] = made;
+        const where = first.atCheckIn
+          ? "at Check-in: take their ID and registration card, and hand over the key"
+          : first.reachedStage === "S5"
+            ? "at Arrival, the rooms handed out"
+            : first.reachedStage === "S4"
+              ? "reserved until Arrival opens"
+              : `at ${stepWord(first.reachedStage)}`;
+        toast.success(`${roomsWord(first.roomNumbers)} for ${first.guestName ?? "the guest"} — ${where}`, {
+          description: others.length
+            ? `Also made: ${others.map((b) => `${roomsWord(b.roomNumbers)} for ${b.guestName ?? "the guest"} (${b.entryId})`).join(" · ")} — open them from the stays in the booking's header.`
+            : undefined,
+          duration: 10000,
+        });
+        router.push(`/bookings/${first.entryId}`);
+        return;
+      }
+      setDone(o);
     },
     onError: (e) => toastRefusal(e, "Could not add the room"),
   });
