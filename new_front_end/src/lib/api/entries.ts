@@ -978,6 +978,9 @@ export type EntryRateReference = {
    */
   apartments?: Array<{
     label: string;
+    /** The apartment, and the most guests it sleeps — the booking's limit for it (2026-11-27). */
+    unitId: string | null;
+    maxOccupants: number | null;
     plan: "MONTHLY" | "WEEKLY";
     packageName: string;
     leadRoomId: string;

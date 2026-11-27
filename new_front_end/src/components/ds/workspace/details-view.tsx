@@ -22,7 +22,7 @@ import { reservedThisPass } from "@/lib/desk/workspace";
 import { heldRoomIds } from "@/lib/desk/party-rooms";
 import { useRoomsList } from "@/hooks/use-desk-data";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
+import { roomNumbersWord, roomsHeldWord, useApartmentOfRooms } from "@/components/ds/steps/s2-shared";
 import { Fact, FactBox, Facts, StepCard } from "@/components/ds/steps/kit";
 import { BookingEmailField } from "@/components/ds/guest-email";
 import { TripCard } from "@/components/ds/workspace/return-stay";
@@ -46,6 +46,7 @@ export function DetailsView({
 }) {
   const [journey, setJourney] = useState(false);
   const [editGuest, setEditGuest] = useState(false);
+  const aptOf = useApartmentOfRooms(entry);
   const sealed = ["CANCELLED", "EXPIRED", "CLOSED"].includes(entry.status);
   const g = entry.guestProfile ?? entry.inquiry?.guestProfile ?? null;
   const inq = (entry.inquiry ?? {}) as Scalars;
@@ -158,10 +159,12 @@ export function DetailsView({
             </Fact>
             <Fact k="Nights">{nights ? plural(nights, "night") : "—"}</Fact>
             <Fact k="Rooms" meta={beds ? `asked for ${beds}` : undefined}>
-              {rooms.length
+              {rooms.length && aptOf.byNo.size
+                ? roomNumbersWord(rooms, aptOf.byNo)
+                : rooms.length
                 ? `${rooms.length} · ${rooms.join(", ")}${types.length ? ` · ${types.join(", ")}` : ""}`
                 : held.length
-                  ? `${roomsHeldWord(held.map((r) => ({ number: r.roomNumber, typeName: r.roomType?.name ?? null, quiet: bookingRoomNames.named.has(r.id) })))} · held for the guest, assigned at Arrival`
+                  ? `${roomsHeldWord(held.map((r) => ({ number: r.roomNumber, typeName: r.roomType?.name ?? null, quiet: bookingRoomNames.named.has(r.id), apartment: aptOf.byId.get(r.id) ?? null })))} · held for the guest, assigned at Arrival`
                   : `${entry.numberOfRooms ?? "—"} · not yet assigned`}
             </Fact>
             <Fact k="Guests">{party}</Fact>

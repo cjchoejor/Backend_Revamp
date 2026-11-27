@@ -29,6 +29,8 @@ export type RoomCompositionInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** An apartment's rent agreed for this booking, a month or a week, without taxes (2026-11-27). */
+  negotiatedRentRate?: number;
   /** This room's own package, when not its room type's (2026-11-13). */
   ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
@@ -92,6 +94,12 @@ export type QuotationLivePreviewRoom = {
   isFoc: boolean;
   /** True when per-date meal plans mean this room's meals are not one multiplication. */
   hasNightMealOverrides: boolean;
+  /** An apartment's rent period by period, on its first room (2026-11-25); null for a room priced by the night. */
+  rent?: {
+    plan: "MONTHLY" | "WEEKLY";
+    rate: string;
+    periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; net: string; serviceCharge: string; gst: string; total: string }>;
+  } | null;
 };
 
 /**

@@ -16,6 +16,7 @@ import { bookingHref } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
 import { getCompetingClaims, type CompetingClaimItem } from "@/lib/api/entries";
 import { listRooms } from "@/lib/api/rooms";
+import { getApartmentPackagesForDates } from "@/lib/api/apartments";
 import { STEP_NAMES, stepNoOfStage } from "@/lib/ds/steps";
 import { fmtDay } from "@/lib/ds/format";
 import type { EntryDetail } from "@/types/api";
@@ -57,18 +58,82 @@ export function useRoomTypeNames(): Map<string, string> {
 }
 
 /**
+ * On a booking let as apartments, which apartment each of its rooms is (2026-11-27, operator: "instead
+ * of showing as two different rooms, can we just show it as one room using only their one number").
+ * Empty on any other booking: a room of an apartment can be sold on its own as a hotel room, and then
+ * it is that room.
+ */
+export function useApartmentOfRooms(entry: Pick<EntryDetail, "useType"> | null | undefined): {
+  byId: Map<string, string>;
+  byNo: Map<string, string>;
+} {
+  const { session } = useSession();
+  const on = String(entry?.useType ?? "") === "APARTMENT";
+  const q = useQuery({
+    queryKey: ["lookup", "apartment-packages"],
+    queryFn: () => getApartmentPackagesForDates(session!),
+    enabled: !!session && on,
+    staleTime: 5 * 60_000,
+  });
+  return useMemo(() => {
+    const byId = new Map<string, string>();
+    const byNo = new Map<string, string>();
+    if (on) {
+      for (const p of q.data?.packages ?? []) {
+        for (const u of (p as { units?: Array<{ label: string; rooms: Array<{ roomId?: string; id?: string; roomNumber: string }> }> }).units ?? []) {
+          for (const r of u.rooms) {
+            const id = r.roomId ?? r.id;
+            if (id) byId.set(id, u.label);
+            byNo.set(r.roomNumber, u.label);
+          }
+        }
+      }
+    }
+    return { byId, byNo };
+  }, [on, q.data]);
+}
+
+/** Room numbers as the desk says them: an apartment's rooms as "Apartment 505", the rest "Rooms 201, 202". */
+export function roomNumbersWord(numbers: string[], apartmentOfNo?: Map<string, string>): string {
+  const apts: string[] = [];
+  const rest: string[] = [];
+  for (const n of numbers) {
+    const a = apartmentOfNo?.get(n);
+    if (a) {
+      if (!apts.includes(a)) apts.push(a);
+    } else if (!rest.includes(n)) rest.push(n);
+  }
+  apts.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  rest.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+  const parts: string[] = [];
+  if (apts.length) parts.push(`${apts.length === 1 ? "Apartment" : "Apartments"} ${apts.join(", ")}`);
+  if (rest.length) parts.push(`${rest.length === 1 ? "Room" : "Rooms"} ${rest.join(", ")}`);
+  return parts.join(" and ");
+}
+
+/**
  * The rooms a booking holds, the way the desk says them (2026-10-29, operator: "it can show like 2
  * Deluxe room 2 Standard room, until and unless specific rooms are chosen"): the rooms the system
  * chose and may still move are counted by type — "2 Deluxe Double and 1 Standard Double" — and a
  * room given by number (a guest's own room, or any room from Arrival on) is named by its number:
  * "2 Deluxe Double and Room 206". A system room whose type is not known yet is named by number too.
  */
-export function roomsHeldWord(rooms: Array<{ number: string | null; typeName: string | null; quiet: boolean }>): string {
+export function roomsHeldWord(rooms: Array<{ number: string | null; typeName: string | null; quiet: boolean; apartment?: string | null }>): string {
   const counts = new Map<string, number>();
   const nos: string[] = [];
+  // An apartment's rooms are one place, named by the apartment (2026-11-27).
+  const apts: string[] = [];
   for (const r of rooms) {
-    if (r.quiet && r.typeName) counts.set(r.typeName, (counts.get(r.typeName) ?? 0) + 1);
+    if (r.apartment) {
+      if (!apts.includes(r.apartment)) apts.push(r.apartment);
+    } else if (r.quiet && r.typeName) counts.set(r.typeName, (counts.get(r.typeName) ?? 0) + 1);
     else if (r.number) nos.push(r.number);
+  }
+  if (apts.length) {
+    apts.sort((a, b) => a.localeCompare(b, "en", { numeric: true }));
+    const aptWord = `${apts.length === 1 ? "Apartment" : "Apartments"} ${apts.join(", ")}`;
+    const rest = rooms.filter((r) => !r.apartment);
+    return rest.length ? `${aptWord} and ${roomsHeldWord(rest)}` : aptWord;
   }
   // The most of a type first, then by name, so every place says the same rooms in the same order.
   const parts = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([t, n]) => `${n} ${t}`);

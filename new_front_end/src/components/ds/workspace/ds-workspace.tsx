@@ -34,7 +34,7 @@ import { getPaymentStatus } from "@/lib/api/reservation-setup";
 import { usePaymentStatus } from "@/hooks/use-payment-status";
 import { useCheckInPayment } from "@/hooks/use-checkin-payment";
 import { useBookingRooms } from "@/hooks/use-booking-rooms";
-import { roomsHeldWord } from "@/components/ds/steps/s2-shared";
+import { roomNumbersWord, roomsHeldWord, useApartmentOfRooms } from "@/components/ds/steps/s2-shared";
 import { usePageTitle } from "@/hooks/use-page-title";
 import { useDeskBookings, useRoomsList } from "@/hooks/use-desk-data";
 import { getBillingSummary, getEntry, getEntryTimers, getEntryTrace, listEntryCommunications, parkEntry, progressStage, switchStay, unparkEntry, type TimerRecordSummary, replySettled, moveTripToNegotiation, moveTripToSetUp, reserveTrip } from "@/lib/api/entries";
@@ -359,6 +359,8 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
   const listRow = useDeskBookings().data?.items.find((r) => r.id === entryId) ?? null;
   // The room registry, to name the rooms a booking holds before Arrival assigns them.
   const roomList = useRoomsList().data?.items;
+  // An apartment booking's rooms are its apartment (2026-11-27).
+  const aptOf = useApartmentOfRooms(entry);
   // A room the system chose and may still move reads "Deluxe Double · room 1" until Arrival.
   const bookingRoomNames = useBookingRooms(entry);
 
@@ -1861,7 +1863,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
     ? roomsHeldWord(
         heldIds.map((id) => {
           const r = roomList?.find((x) => x.id === id);
-          return { number: r?.roomNumber ?? null, typeName: r?.roomType?.name ?? null, quiet: bookingRoomNames.named.has(id) };
+          return { number: r?.roomNumber ?? null, typeName: r?.roomType?.name ?? null, quiet: bookingRoomNames.named.has(id), apartment: aptOf.byId.get(id) ?? null };
         }),
       ).replace(/^Rooms? /, "")
     : "";
@@ -1930,6 +1932,17 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                 <StayDates checkIn={entry.checkInDate} checkOut={co} />
                 {nights ? <> · <b>{plural(nights, "night")}</b></> : null}
               </span>
+              {aptOf.byNo.size ? (
+                // An apartment booking names its apartments, never the rooms behind them (2026-11-27).
+                <span>
+                  <b>
+                    {roomNumbers.length
+                      ? roomNumbersWord(roomNumbers, aptOf.byNo)
+                      : heldRoomsWord || plural(entry.apartmentCount ?? 1, "apartment")}
+                  </b>
+                  {roomNumbers.length ? "" : heldRoomsWord ? ` · ${roomsActuallyHeld ? "held" : "picked, not held"}` : " · not picked yet"}
+                </span>
+              ) : (
               <span>
                 Rooms <b>{roomNumbers.length || entry.numberOfRooms || "—"}</b>
                 {roomNumbers.length
@@ -1938,6 +1951,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
                     ? ` · ${heldRoomsWord} · ${roomsActuallyHeld ? "held" : "picked, not held"}`
                     : " · not yet assigned"}
               </span>
+              )}
               <span>{cameInAs}</span>
               <span>
                 Custodian <b>{listRow?.custodianName ?? "—"}</b>
@@ -2047,7 +2061,7 @@ export function DsWorkspace({ entryId }: { entryId: string }) {
         <CommitDialog
           open={checkInOpen}
           title="Check in and open the folio"
-          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${roomNumbers.length ? `Rooms ${roomNumbers.join(", ")}` : ""}`]}
+          caseLines={[<b key="n">{name}</b>, `${entry.id} · ${roomNumbers.length ? roomNumbersWord(roomNumbers, aptOf.byNo) : ""}`]}
           lines={["The folio goes live — from here it can only grow.", "The rooms become occupied and the keys are handed over.", "Charges begin posting against the live folio."]}
           confirmLabel="Check in & go live"
           pending={checkInMutation.isPending}

@@ -47,7 +47,7 @@ import { Choice, latestDispatched, useCommunications, useReplyAsked, DsDialog, L
 import { usePublishPriceDraft } from "@/lib/ds/stay-price";
 import { Help } from "@/components/ds/help";
 import type { ChangeBookingItem } from "./kit";
-import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
+import { CompetingClaimsCard, LEVEL_WORD, passesOf, roomsHeldWord, useApartmentOfRooms, useCompetingClaims, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 import { TripQuotationCard, useTripQuotation } from "./s2-trip-quotation";
@@ -151,8 +151,10 @@ export function S2Negotiation({
   const bookingRooms = useBookingRooms(entry);
   // The rooms the system chose, counted by type; a room given by number, by its number (2026-10-29).
   const typeNames = useRoomTypeNames();
+  // An apartment booking's rooms are its apartment (2026-11-27).
+  const aptOf = useApartmentOfRooms(entry);
   const heldWord = (ids: string[]) =>
-    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: bookingRooms.named.has(id) })));
+    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: bookingRooms.named.has(id), apartment: aptOf.byId.get(id) ?? null })));
   const stay = useStayTable(entry, { past });
   const together = useStaysTogether(past ? null : entry);
   const { passes, passId, editable, quotations, accepted, working, shown, sealedPreferred, sealedRoomIds, beds, anchorRoomId, tableFaults, setTableFaults, roomDates, proformaLocked, roomCompositions, setRoomCompositions, discountValue, setDiscountValue, discountUnit, setDiscountUnit, recordedDiscount, discountForPreview, tableUnsaved, validWindow, inHours, validUnit, maxValid, validTouched, setValidTouched, validNumber, seedCompositions, createBody, supersedeBody, tableOpen } = stay;
@@ -201,7 +203,7 @@ export function S2Negotiation({
   const staysToMark = groupStays.filter((e) => !activeHoldOf(e));
   const stayWord = (e: EntryDetail) => (together.active ? `Stay ${together.stayNoOf(e.id)} · ` : "");
   const heldWordOf = (e: EntryDetail, ids: string[]) =>
-    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: tableOf(e)?.bookingRooms.named.has(id) ?? false })));
+    roomsHeldWord(ids.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: tableOf(e)?.bookingRooms.named.has(id) ?? false, apartment: aptOf.byId.get(id) ?? null })));
 
   /* ---- what the doors hold ---- */
   const [holdWhy, setHoldWhy] = useState("");
@@ -586,7 +588,13 @@ export function S2Negotiation({
         // fold once the table is priced (its item is the quotation), so the placeholder never shows.
         summary={tableSummary ?? "Not priced yet"}
         noDoneBar
-        title={together.active ? `Who sleeps where, and their meals · ${together.label.toLowerCase()} together` : "Who sleeps where, and their meals"}
+        title={
+          together.active
+            ? `Who sleeps where, and their meals · ${together.label.toLowerCase()} together`
+            : aptOf.byId.size && sealedRoomIds.every((id) => aptOf.byId.has(id))
+              ? "Who stays in each apartment, and the rent"
+              : "Who sleeps where, and their meals"
+        }
         meta="One row per room: the guests by age, their meal plans, extra beds, any negotiated rate and the booking's discount. Saving the table prices it — that is the quotation."
       >
         <DuplicateQuestions entry={entry} editable={editable && !past} cancelWord="cancel this booking" />

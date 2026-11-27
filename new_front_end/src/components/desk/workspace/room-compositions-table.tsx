@@ -13,6 +13,7 @@ import { Help, useQuietScreen } from "@/components/ds/help";
 import { Button } from "@/design-system/components/primitives";
 import { Choice, DsDialog } from "@/components/ds/steps/kit";
 import { MoneyInput } from "@/design-system";
+import { ApartmentCompositionsTable } from "./apartment-compositions-table";
 
 /**
  * Spreadsheet-style composition table (2026-07-28) — the pure-tabular alternative to the
@@ -735,7 +736,30 @@ export function CompositionsHead({
   );
 }
 
-export function RoomCompositionsTable({
+/**
+ * The table for a stay (2026-11-27): a booking let wholly as apartments is drawn one row per
+ * apartment (`ApartmentCompositionsTable`), any other booking the grid below. Which it is comes from
+ * the rate reference, which the grid reads anyway, so nothing is drawn until it has answered — the
+ * two tables emit different rows, and drawing the wrong one first would hand the step its rows.
+ */
+export function RoomCompositionsTable(props: Parameters<typeof RoomCompositionsGrid>[0]) {
+  const { session } = useSession();
+  const asApartments = !props.grouped && !!props.entryId && props.sealedRoomIds.length > 0;
+  const q = useQuery({
+    queryKey: ["rate-reference", props.entryId, props.sealedRoomIds.join(",")],
+    queryFn: () => getRateReference(session!, props.entryId!, props.sealedRoomIds),
+    enabled: !!session && asApartments,
+    staleTime: 30_000,
+  });
+  if (asApartments && !q.data && !q.isError) return <p className="muted" style={{ margin: "8px 0" }}>Reading the rates…</p>;
+  const apartments = q.data?.apartments ?? [];
+  const allApartments =
+    asApartments && apartments.length > 0 && props.sealedRoomIds.every((id) => apartments.some((a) => a.roomIds.includes(id)));
+  if (allApartments) return <ApartmentCompositionsTable {...props} apartments={apartments} />;
+  return <RoomCompositionsGrid {...props} />;
+}
+
+function RoomCompositionsGrid({
   grouped,
   entryId,
   sealedRoomIds,

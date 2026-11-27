@@ -45,7 +45,7 @@ import { useTripQuotation } from "./s2-trip-quotation";
 import { useTripProforma } from "./s3-trip-proforma";
 import { DsDialog, FactBox, FactLine, Facts, Fact, Live, OnRecord, PaperDrawer, SendPaperPanel, StepCanvas, StepCard, Tool, AnswerLine, useReplyAsked, atLeast, currentPassStart, goToStepCard, latestDispatched, toastRefusal, useCommunications, useFinishWhenDone, useRefreshEntry, useStepMode, useStepPane, words, type FactState, type PaperRef, NightsChoice, NotSentChip, RoomTypesChoice, useSendRoomTypes } from "./kit";
 import { BookingOtherWays } from "./s4-other-ways";
-import { roomsHeldWord } from "./s2-shared";
+import { roomsHeldWord, useApartmentOfRooms } from "./s2-shared";
 import { Help } from "@/components/ds/help";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 
@@ -284,11 +284,14 @@ type StayFactsRead = {
   trace: TraceItem[];
   overlap: Awaited<ReturnType<typeof listSameGuestBookings>>["reserveOverlap"] | null;
   roomByNo: Map<string, string>;
+  /** On an apartment booking, room number → its apartment (2026-11-27). */
+  aptOfNo: Map<string, string>;
   bookingRooms: Awaited<ReturnType<typeof getBookingRooms>> | null;
 };
 
 function useStayFactReads(stays: EntryDetail[]): StayFactsRead[] {
   const { session } = useSession();
+  const aptOf = useApartmentOfRooms(stays[0] ?? null);
   const pays = useQueries({
     queries: stays.map((s) => ({ queryKey: ["payment-status", s.id], queryFn: () => getPaymentStatus(session!, s.id), enabled: !!session && !!s.folio, retry: false })),
   });
@@ -319,6 +322,7 @@ function useStayFactReads(stays: EntryDetail[]): StayFactsRead[] {
     trace: traces[i]?.data?.items ?? [],
     overlap: overlaps[i]?.data?.reserveOverlap ?? null,
     roomByNo: quietRoomsByNumber(rooms[i]?.data),
+    aptOfNo: aptOf.byNo,
     bookingRooms: rooms[i]?.data ?? null,
   }));
 }
@@ -339,7 +343,7 @@ function stayFacts(
   read: StayFactsRead,
   ctx: { tz: string; past: boolean; fom: boolean; many: boolean; onOverlap: (e: EntryDetail) => void; onVerify: (e: EntryDetail) => void },
 ): StayFacts {
-  const { pay, comms, journey, billing, trace, overlap, roomByNo } = read;
+  const { pay, comms, journey, billing, trace, overlap, roomByNo, aptOfNo } = read;
   const { tz, past, fom, many } = ctx;
   const since = currentPassStart(entry);
   const cur = billing?.currency ?? "BTN";
@@ -431,7 +435,7 @@ function stayFacts(
   // Counted by type while the system may still move them; a room given by number by its number (2026-10-29).
   const holdRooms = holdJ?.rooms ?? [];
   const holdWord = holdRooms.length
-    ? roomsHeldWord(holdRooms.map((r) => ({ number: r.roomNumber, typeName: r.roomTypeName, quiet: !!r.roomNumber && roomByNo.has(r.roomNumber) })))
+    ? roomsHeldWord(holdRooms.map((r) => ({ number: r.roomNumber, typeName: r.roomTypeName, quiet: !!r.roomNumber && roomByNo.has(r.roomNumber), apartment: r.roomNumber ? (aptOfNo.get(r.roomNumber) ?? null) : null })))
     : null;
   const holdOk = metOr("Rooms blocked");
   lines.push({
@@ -1121,7 +1125,7 @@ function OverlapDialog({ entry, open, onClose }: { entry: EntryDetail; open: boo
 
 /** What Reserve froze for one stay. The same lines a stay's own page has always shown. */
 function decidedLines(entry: EntryDetail, read: StayFactsRead, ctx: { tz: string; recipientTo: string }): Line[] {
-  const { pay, comms, journey, billing, trace, roomByNo, bookingRooms } = read;
+  const { pay, comms, journey, billing, trace, roomByNo, aptOfNo, bookingRooms } = read;
   const { tz, recipientTo } = ctx;
   const res = entry.reservation!;
   const cur = billing?.currency ?? "BTN";
@@ -1213,9 +1217,9 @@ function decidedLines(entry: EntryDetail, read: StayFactsRead, ctx: { tz: string
           {held ? <Chip tone="warning">Held · not yet Reserved</Chip> : <Chip tone="success">Reserved</Chip>}{" "}
           {/* The booking's own rooms first — each with its type, and whether the system may still move it. */}
           {bookingRooms?.rooms.length
-            ? roomsHeldWord(bookingRooms.rooms.map((r) => ({ number: r.roomNumber, typeName: r.typeName, quiet: r.quiet && bookingRooms.atArrival !== true })))
+            ? roomsHeldWord(bookingRooms.rooms.map((r) => ({ number: r.roomNumber, typeName: r.typeName, quiet: r.quiet && bookingRooms.atArrival !== true, apartment: r.roomNumber ? (aptOfNo.get(r.roomNumber) ?? null) : null })))
             : rooms.length
-              ? roomsHeldWord(rooms.map((n) => ({ number: n, typeName: typeOfNo.get(n) ?? null, quiet: roomByNo.has(n) })))
+              ? roomsHeldWord(rooms.map((n) => ({ number: n, typeName: typeOfNo.get(n) ?? null, quiet: roomByNo.has(n), apartment: aptOfNo.get(n) ?? null })))
               : `${plural(entry.numberOfRooms ?? 1, "room")} · numbers assigned at Arrival`}
         </>
       ),

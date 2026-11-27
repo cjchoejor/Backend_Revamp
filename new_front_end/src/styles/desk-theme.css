@@ -2560,6 +2560,62 @@
     width: 100%;
     font-size: 11.5px;
   }
+  /* An apartment is one row (2026-11-27): its number large, what it is under it, the rent a month or
+     a week as a figure, the stay's rent beside it. */
+  & .apt-t td {
+    padding: 6px 8px;
+    vertical-align: middle;
+  }
+  & .apt-t th.apt-name,
+  & .apt-t td.apt-name {
+    text-align: left;
+    min-width: 200px;
+  }
+  & .apt-t td.apt-name b {
+    display: block;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  & .apt-t .apt-sub {
+    display: block;
+    font-size: 11px;
+    color: var(--ink-3);
+    white-space: normal;
+  }
+  & .apt-t td.apt-rent,
+  & .apt-t td.apt-stay {
+    text-align: right;
+    min-width: 150px;
+  }
+  & .apt-t td.apt-rent .apt-sub,
+  & .apt-t td.apt-stay .apt-sub {
+    text-align: right;
+  }
+  & .apt-t .apt-figure {
+    display: block;
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+  & .apt-t td.apt-rent input.rct-in {
+    text-align: right;
+    width: 120px;
+  }
+  & .apt-t td.num {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  & .apt-t td.num.occ.stop {
+    color: var(--stop);
+    background: var(--stop-bg, #fbeaea);
+  }
+  & .apt-t td:not(.apt-rent) input.rct-in {
+    width: 46px;
+    display: block;
+    margin: 0 auto;
+    text-align: center;
+  }
   & .rct-t th,
   & .rct-t td {
     border-right: 1px solid var(--line);

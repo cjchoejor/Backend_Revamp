@@ -7,6 +7,7 @@ import { useSession } from "@/hooks/use-session";
 import { listRooms } from "@/lib/api/rooms";
 import { getAllowedRoomCounts, getChildPolicy } from "@/lib/api/child-policy";
 import type { RoomCompositionInput } from "@/lib/api/quotations";
+import { getRateReference } from "@/lib/api/entries";
 import { FixedDiscount, RoomCompositionsTable, type BedAskSummary, type BedPlanCell, type DiscountEdit } from "./room-compositions-table";
 import { RateReferenceStrip } from "./rate-reference-strip";
 
@@ -1226,7 +1227,19 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   tableOnly?: boolean;
   onChange: (compositions: RoomCompositionInput[]) => void;
 }) {
-  const canBoard = (props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0;
+  const { session } = useSession();
+  // An apartment booking has no guest board (2026-11-27): its guests are counted per apartment, not
+  // seated room by room. The same rate reference the table reads, so it is asked once.
+  const rateRefQ = useQuery({
+    queryKey: ["rate-reference", props.entryId, props.sealedRoomIds.join(",")],
+    queryFn: () => getRateReference(session!, props.entryId!, props.sealedRoomIds),
+    enabled: !!session && !!props.entryId && props.sealedRoomIds.length > 0,
+    staleTime: 30_000,
+  });
+  const apartmentsOnly =
+    (rateRefQ.data?.apartments?.length ?? 0) > 0 &&
+    props.sealedRoomIds.every((id) => (rateRefQ.data?.apartments ?? []).some((a) => a.roomIds.includes(id)));
+  const canBoard = !apartmentsOnly && ((props.entryAdults ?? 0) > 0 || (props.entryChildAges?.length ?? 0) > 0);
   const [mode, setMode] = useState<"table" | "board">("table");
   /**
    * Which room the board shows on its own. Lives here rather than in the board so the table

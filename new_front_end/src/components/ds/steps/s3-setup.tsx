@@ -53,7 +53,7 @@ import { useStaysTogether } from "./s2-together";
 import { TripCancelWay } from "./s3-trip-cancel";
 import { SendToField, useSendTo } from "./s8-parts";
 import { CancellationFiguresLine, WaiverTick, useRefundHow } from "./cancel-figures";
-import { CompetingClaimsCard, passesOf, roomsHeldWord, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
+import { CompetingClaimsCard, passesOf, roomsHeldWord, useApartmentOfRooms, useRoomNumbers, useRoomTypeNames } from "./s2-shared";
 import { PaymentPlanCard, TogetherPaymentPlan } from "./s3-money";
 import { Help, HelpHere } from "@/components/ds/help";
 import { DateInput, TimeInput } from "@/components/ds/date-input";
@@ -848,11 +848,12 @@ const heldOf = (st: EntryDetail) => {
 function StayHoldRow({ stay, stayNo, tz, nowMs, roomNos, houseWords }: { stay: EntryDetail; stayNo: number; tz: string; nowMs: number; roomNos: Map<string, string>; houseWords: string | null }) {
   const roomNames = useBookingRooms(stay).named;
   const typeNames = useRoomTypeNames();
+  const aptOf = useApartmentOfRooms(stay);
   const sealed = (stay.availabilityConfigs ?? []).find((c) => c.sealedAt && c.optionSelected);
   const ids = optionSelectedRoomIds(sealed?.optionSelected);
   const hold = heldOf(stay);
   const heldIds = ids.length ? ids : hold?.roomId ? [hold.roomId] : [];
-  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id), apartment: aptOf.byId.get(id) ?? null })));
   const many = heldIds.length > 1;
   if (!hold) {
     return (
@@ -1115,8 +1116,9 @@ function HoldCard({
   // The rooms by type and count — "2 Deluxe Double and 1 Executive" (2026-10-28, operator) — and a
   // room given by number by its number (2026-10-29).
   const typeNames = useRoomTypeNames();
+  const aptOf = useApartmentOfRooms(entry);
   const heldIds = roomIds.length ? roomIds : hold?.roomId ? [hold.roomId] : [];
-  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id) })));
+  const rooms = roomsHeldWord(heldIds.map((id) => ({ number: roomNos.get(id) ?? null, typeName: typeNames.get(id) ?? null, quiet: roomNames.has(id), apartment: aptOf.byId.get(id) ?? null })));
   const houseWords = house ? blockWindowWords(house.minutes) : null;
   const count = roomIds.length || 1;
   // The block's time has ended: the rooms stay held, it is critical, and the FOM or GM decides
