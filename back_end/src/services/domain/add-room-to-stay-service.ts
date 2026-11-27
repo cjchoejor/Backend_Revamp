@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { enforceMayApprove, readApprovalRoles } from "../../lib/approval-roles.js";
 import { addUtcDays, effectiveCheckOutDate, hotelTodayUtc, listNightYmdsUtc, utcDateOnly, ymdUtc } from "../../lib/stay-dates.js";
 import { loadEntryDetail } from "../../lib/entry-detail-include.js";
+import { guestDisplayName } from "../../lib/guest-display-name.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { cleanPhone } from "../../lib/phone-numbers.js";
 import { personFromName } from "../../lib/person-name.js";
@@ -64,6 +65,17 @@ async function loadStay(prisma: PrismaClient, entryId: string) {
 }
 
 type Stay = Awaited<ReturnType<typeof loadStay>>;
+
+const STILL_IN_WHY = "The guest is still in the room past their check-out day — they leave before anyone goes in";
+const LEAVING_TODAY_WHY = "The guest checks out today — the room is free once they leave and it is cleaned";
+/** How a booking holding a night stands, in the desk's words. */
+function nightState(status: string, stage: string | null): string {
+  if (status === "FREE") return "Free";
+  if (status === "BLOCKED") return "Out of service";
+  if (status === "MAINTENANCE") return "Maintenance";
+  const byStage: Record<string, string> = { S1: "Picked", S2: "Held", S3: "Held", S4: "Reserved", S5: "Arriving", S6: "Checking in", S7: "In house", S8: "Checking out" };
+  return (stage && byStage[stage]) || (status === "HELD" ? "Held" : "Reserved");
+}
 
 function refusalOf(entry: Stay): string | null {
   if (entry.status !== "ACTIVE") return `This booking is ${entry.status.toLowerCase()} — a room is added to a live stay`;
@@ -176,11 +188,90 @@ export async function previewAddRoom(prisma: PrismaClient, entryId: string, acto
     excludeEntryId: entryId,
     avoidRoomIds: mine,
   }).catch(() => new Map());
+  // Who is still in a room tonight past their check-out day — the dates no longer show them (2026-11-27).
+  const stillInIds = arrivesToday ? all.filter((r) => r.currentClaimState === "OCCUPIED").map((r) => r.id) : [];
+  const inRoomRows = stillInIds.length
+    ? await prisma.roomAssignment.findMany({
+        where: { roomId: { in: stillInIds }, entry: { status: "ACTIVE", currentStage: { in: [Stage.S6, Stage.S7, Stage.S8] } } },
+        orderBy: { createdAt: "desc" },
+        select: {
+          roomId: true,
+          entry: {
+            select: {
+              id: true,
+              currentStage: true,
+              status: true,
+              checkInDate: true,
+              checkOutDate: true,
+              guestProfile: { select: { title: true, firstName: true, lastName: true } },
+              inquiry: { select: { travelAgent: { select: { displayName: true } }, corporateAccount: { select: { displayName: true } } } },
+            },
+          },
+        },
+      })
+    : [];
+  const stillInBy = new Map<string, (typeof inRoomRows)[number]["entry"]>();
+  for (const row of inRoomRows) if (!stillInBy.has(row.roomId)) stillInBy.set(row.roomId, row.entry);
   const oneOfEach = new Map<string, string>();
   for (const r of standing) if (!oneOfEach.has(r.roomTypeId)) oneOfEach.set(r.roomTypeId, r.roomId);
   const ref = await buildEntryRateReference(prisma, entryId, { planRoomIds: [...oneOfEach.values()], stay: { checkIn: arrive, checkOut: leave } }).catch(() => null);
+  /**
+   * The bookings in a room's way: those holding it on these nights — only one whose guest has not
+   * arrived can be moved (2026-11-26, operator: "if those rooms are just reserved and the guest hasn't
+   * arrived yet") — and, for tonight, a guest still in it past their check-out day.
+   */
+  const holdersOf = (roomId: string) => {
+    const list = ((holders.get(roomId) ?? []) as Array<Record<string, unknown> & { stage: string }>).map((h) =>
+      ["S6", "S7", "S8", "S9"].includes(h.stage) ? { ...h, swappable: false, why: "The guest is in the room — their booking can't be moved" } : h,
+    ) as unknown as Array<{
+      entryId: string;
+      bookingRef: string | null;
+      guestName: string | null;
+      partyName: string | null;
+      stage: string;
+      status: string;
+      checkIn: string | null;
+      checkOut: string | null;
+      nightsInRoom: string[];
+      swappable: boolean;
+      why: string | null;
+      rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+    }>;
+    const e = stillInBy.get(roomId);
+    if (e && !list.some((h) => h.entryId === e.id)) {
+      list.unshift({
+        entryId: e.id,
+        bookingRef: e.id,
+        guestName: e.guestProfile ? guestDisplayName(e.guestProfile) : null,
+        partyName: e.inquiry?.travelAgent?.displayName ?? e.inquiry?.corporateAccount?.displayName ?? null,
+        stage: e.currentStage,
+        status: e.status,
+        checkIn: e.checkInDate ? ymdUtc(e.checkInDate) : null,
+        checkOut: e.checkOutDate ? ymdUtc(e.checkOutDate) : null,
+        nightsInRoom: [ymdUtc(today)],
+        swappable: false,
+        why: e.checkOutDate && ymdUtc(e.checkOutDate) === ymdUtc(today) ? LEAVING_TODAY_WHY : STILL_IN_WHY,
+        rooms: [],
+      });
+    }
+    return list;
+  };
   const rateOf = (typeId: string) => ref?.roomTypes.find((t) => t.roomTypeId === typeId)?.roomRate ?? null;
 
+  type Holder = {
+    entryId: string;
+    bookingRef: string | null;
+    guestName: string | null;
+    partyName: string | null;
+    stage: string;
+    status: string;
+    checkIn: string | null;
+    checkOut: string | null;
+    nightsInRoom: string[];
+    swappable: boolean;
+    why: string | null;
+    rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
+  };
   const rooms = standing
     .map((r) => {
       const p = physical.get(r.roomId);
@@ -194,7 +285,7 @@ export async function previewAddRoom(prisma: PrismaClient, entryId: string, acto
       const freeUntil = firstTaken ?? ymdUtc(leave);
       const free = (r.availability === "FREE" || (!!firstTaken && firstTaken > ymdUtc(arrive))) && !stillIn;
       const why = stillIn
-        ? "A guest is still in it — it is free once they leave"
+        ? "A guest is in it tonight"
         : !free
         ? r.availability === "BLOCKED"
           ? `Out of service${r.blockedReason ? ` — ${r.blockedReason}` : ""}`
@@ -214,30 +305,29 @@ export async function previewAddRoom(prisma: PrismaClient, entryId: string, acto
         maxExtraBeds: p?.roomType?.maxExtraBeds ?? null,
         maxChildren: p?.roomType?.maxChildren ?? null,
         availability: r.availability,
-        perNight: r.perNight.map((n) => ({ date: n.date, status: n.status, guest: n.claimedBy?.guestName ?? null, bookingRef: n.claimedBy?.bookingRef ?? null })),
+        // Each night says how its booking stands, and which booking it is (2026-11-27, operator: "we need a
+        // tag … in the dates itself … show the status, when user clicks on the status then it can show
+        // which guest booked it").
+        perNight: r.perNight.map((n) => {
+          const hs = holdersOf(r.roomId);
+          const still = stillIn && n.date === ymdUtc(today) ? hs.find((h) => h.why === STILL_IN_WHY || h.why === LEAVING_TODAY_WHY) : null;
+          const h = still ?? hs.find((x) => x.nightsInRoom.includes(n.date)) ?? null;
+          return {
+            date: n.date,
+            status: n.status,
+            guest: h?.guestName ?? n.claimedBy?.guestName ?? null,
+            bookingRef: h?.bookingRef ?? n.claimedBy?.bookingRef ?? null,
+            entryId: h?.entryId ?? null,
+            stage: h?.stage ?? null,
+            state: still ? (still.why === LEAVING_TODAY_WHY ? "Leaving today" : "Still in") : nightState(n.status, h?.stage ?? null),
+          };
+        }),
         selectable: free && !dirty,
         why: why ?? (free && firstTaken ? `Free until ${fmtDay(firstTaken)} — then it is another guest's` : null),
         needsCleaning: dirty,
         /** The last day these guests may leave it: the day its next guest comes, else the day asked. */
         freeUntil,
-        // Only a booking whose guest has not arrived can be moved out of the way (2026-11-26, operator:
-        // "if those rooms are just reserved and the guest hasn't arrived yet").
-        holders: ((holders.get(r.roomId) ?? []) as Array<{ stage: string; swappable: boolean; why: string | null }>).map((h) =>
-          ["S6", "S7", "S8", "S9"].includes(h.stage) ? { ...h, swappable: false, why: "The guest is in the room" } : h,
-        ) as Array<{
-          entryId: string;
-          bookingRef: string | null;
-          guestName: string | null;
-          partyName: string | null;
-          stage: string;
-          status: string;
-          checkIn: string | null;
-          checkOut: string | null;
-          nightsInRoom: string[];
-          swappable: boolean;
-          why: string | null;
-          rooms: Array<{ roomId: string; roomNumber: string; roomTypeName: string | null; sameType: boolean }>;
-        }>,
+        holders: holdersOf(r.roomId),
         roomRate: rateOf(r.roomTypeId),
       };
     })
