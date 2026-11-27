@@ -181,21 +181,22 @@ export function BookingBox({
   const landingOf = (t: { nights: string[] }) => t.nights.map((n) => shift(n, days));
   const charts = [chart, days ? (landQ.data ?? null) : null].filter((c): c is RoomChart => !!c);
   /** Another booking on the room on any of these nights, or the room out of order — read off the chart. */
-  const blockerOn = (roomId: string, dates: string[]): { words: string; outOfOrder: boolean } | null => {
+  const blockerOn = (roomId: string, dates: string[]): { words: string; outOfOrder: boolean; swappable: boolean } | null => {
     for (const c of charts) {
       for (const b of c.bars) {
         if (b.roomId !== roomId || b.entryId === booking.entryId || b.kind === "CHECKED_OUT") continue;
         const hit = dates.filter((d) => d >= b.from && d < b.to);
         if (!hit.length) continue;
         const bk = c.bookings.find((x) => x.entryId === b.entryId);
-        return { words: `${bk ? rowNameOf(bk) : "another booking"}'s on ${daysWords(hit)}`, outOfOrder: false };
+        // A booking whose guest has not arrived can trade nights (2026-11-27).
+        return { words: `${bk ? rowNameOf(bk) : "another booking"}'s on ${daysWords(hit)}`, outOfOrder: false, swappable: b.kind === "RESERVED" || b.kind === "HELD" };
       }
       const room = c.rooms.find((r) => r.id === roomId);
       const down = dates.filter((d) => {
         const i = c.nights.indexOf(d);
         return i >= 0 && !!room?.outOfOrder?.nights[i];
       });
-      if (down.length) return { words: `out of order on ${daysWords(down)}`, outOfOrder: true };
+      if (down.length) return { words: `out of order on ${daysWords(down)}`, outOfOrder: true, swappable: false };
     }
     return null;
   };
@@ -212,8 +213,15 @@ export function BookingBox({
     const other = tickedRooms.find((o) => o.roomId !== t.roomId && toOf(o.roomId) === id && (toOf(o.roomId) !== o.roomId || days !== 0) && overlaps(landingOf(o), land));
     if (other) return { words: `Room ${other.roomNumber} goes here on ${daysWords(landingOf(other).filter((d) => land.includes(d)))}`, shut: true };
     const block = blockerOn(id, land);
-    // A whole room on the same dates swaps with the booking in its way: it takes the room left behind.
-    if (block) return { words: !block.outOfOrder && !nightMove && days === 0 ? `${block.words} — they would take Room ${t.roomNumber}` : block.words, shut: block.outOfOrder || nightMove };
+    // On the same dates the booking in the way swaps: it takes the room left, on those nights
+    // (2026-11-27, operator: "make the swap work from Praneesha's side"). A whole room on other dates
+    // is the server's to judge (trading stays).
+    if (block) {
+      if (block.outOfOrder) return { words: block.words, shut: true };
+      const swap = days === 0 && (block.swappable || !nightMove);
+      if (swap) return { words: `${block.words} — they would take Room ${t.roomNumber}`, shut: false };
+      return { words: block.words, shut: nightMove };
+    }
     if (nightMove) {
       const kept = keptOn(id, land);
       if (kept.length) return { words: `this booking's room on ${daysWords(kept)}`, shut: true };
@@ -245,6 +253,23 @@ export function BookingBox({
   const label = rowNameOf(booking);
   const show = () => {
     if (why || !firstNight) return;
+    // Single nights landing on a room another booking holds swap through the room move: each room a
+    // leg, with only its ticked nights when the room keeps the booking's other nights (2026-11-27).
+    const swaps = days === 0 && nightMove && tickedRooms.some((t) => toOf(t.roomId) !== t.roomId && !!blockerOn(toOf(t.roomId), t.nights));
+    if (swaps) {
+      onMove({
+        kind: "rooms",
+        legs: tickedRooms
+          .filter((t) => toOf(t.roomId) !== t.roomId)
+          .map((t) => ({
+            entryId: booking.entryId,
+            fromRoomId: t.roomId,
+            toRoomId: toOf(t.roomId),
+            ...(t.nights.length < heldNights(t.roomId).length ? { nights: t.nights } : {}),
+          })),
+      });
+      return;
+    }
     if (allWhole && days !== 0 && ci) {
       const roomMap = Object.fromEntries(tickedRooms.map((t) => [t.roomId, toOf(t.roomId)]));
       if (everyRoom) {

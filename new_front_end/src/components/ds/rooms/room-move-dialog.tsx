@@ -144,7 +144,10 @@ function PreviewLegCard({
           <b>{leg.toNightsLabel ?? "—"}</b>
         </div>
       ) : leg.nightsLabel ? (
-        <div className="sm">Nights: <b>{leg.nightsLabel}</b></div>
+        <div className="sm">
+          Nights: <b>{leg.nightsLabel}</b>
+          {leg.partOfStay ? <span className="muted"> · only these — the room keeps the booking&apos;s other nights</span> : null}
+        </div>
       ) : null}
       {leg.guestOverlap && !asks ? <p className="rmv-overlap done">{leg.guestOverlap}</p> : null}
       {asks ? (
@@ -350,6 +353,8 @@ export function RoomMoveDialog({
           toRoomId: l.toRoomId,
           displacedBy: l.displacedBy,
           newCheckInDate: l.newCheckInDate,
+          // A part of a room's stay keeps its nights, or the next ask would move every night of it.
+          ...(l.partOfStay ? { nights: l.nights } : {}),
         })),
       );
     },

@@ -21,6 +21,8 @@ export type RoomMoveLegInput = {
    * bookings on different dates take each other's room and dates).
    */
   newCheckInDate?: string | null;
+  /** Only these nights of the room move, "YYYY-MM-DD" — the rest stay (2026-11-27). */
+  nights?: string[] | null;
 };
 
 export type RoomMovePreviewLeg = {
@@ -38,6 +40,8 @@ export type RoomMovePreviewLeg = {
   toRoom: { roomId: string; roomNumber: string; roomTypeName: string | null } | null;
   nights: string[];
   nightsLabel: string | null;
+  /** Only `nights` of the room move — the room keeps the booking's other nights (2026-11-27). */
+  partOfStay?: boolean;
   /** Set when the stay moves to other dates too: its new first night and the nights it lands on. */
   newCheckInDate: string | null;
   toNights: string[] | null;
