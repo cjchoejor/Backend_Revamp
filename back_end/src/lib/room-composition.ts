@@ -116,7 +116,13 @@ export type RoomRent = {
   roomNumbers?: string[];
   /** The plan's rate WITHOUT service charge and GST — what a stay cut short is priced again on. */
   rate?: string;
-  periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; net: string }>;
+  /** Under a booking discount (2026-11-27): the rate before it; `rate` is the one the stay is billed on. */
+  listRate?: string;
+  /**
+   * Each period's rent without taxes. Under a booking discount `net` is what the bill posts and
+   * `listNet` the rent before it, which the papers print above the discount line (2026-11-27).
+   */
+  periods: Array<{ from: string; to: string; nights: number; ofNights: number; whole: boolean; net: string; listNet?: string }>;
 };
 
 /** Rates + tax percentages fetched from rate card + config at pricing time. Callers assemble
@@ -798,6 +804,35 @@ export function applyBookingDiscountToTotals(
     // quotation, so the night audit splits the frozen room exactly the same way.
     const mealsNet = r.subtotal.gt(0) ? round2(r.mealsNet.mul(subtotal).div(r.subtotal)) : ZERO;
     const accommodationNet = subtotal.sub(mealsNet);
+    // An apartment (2026-11-27, operator: "fixed discount is not working"): its rent is posted period
+    // by period, each a line taxed on its own, so the money off is shared over its periods — every
+    // period at the same share of its rent, any chhertum left over on the last — and each period is
+    // taxed again as its line. The bill then posts exactly these periods. Each keeps its rent before
+    // the discount (`listNet`) for the papers, and the rate a stay cut short is priced on moves too.
+    if (r.rent && r.rent.periods.length) {
+      const rule = taxRuleFor(rooms[i]?.input, rooms[i]?.ctx);
+      const list = r.rent.periods.map((p) => toDecimal(p.listNet ?? p.net));
+      const listSum = list.reduce<Prisma.Decimal>((a, x) => a.add(x), ZERO);
+      const share = listSum.gt(0) ? accommodationNet.div(listSum) : ZERO;
+      const periodNets = list.map((x) => round2(x.mul(share)));
+      const over = accommodationNet.sub(periodNets.reduce<Prisma.Decimal>((a, x) => a.add(x), ZERO));
+      if (!over.isZero()) periodNets[periodNets.length - 1] = periodNets[periodNets.length - 1].add(over);
+      const periods = r.rent.periods.map((p, k) => {
+        const net = periodNets[k];
+        const t = lineTax(net, rule);
+        return { ...p, listNet: list[k].toFixed(2), net: net.toFixed(2), serviceCharge: t.serviceCharge.toFixed(2), gst: t.gst.toFixed(2), total: net.add(t.serviceCharge).add(t.gst).toFixed(2) };
+      });
+      const listRate = r.rent.listRate ?? r.rent.rate;
+      const meals = roomStayTax({ accommodation: ZERO, meals: mealsNet, nights: r.nights, rule });
+      const serviceCharge = periods.reduce<Prisma.Decimal>((a, p) => a.add(p.serviceCharge), meals.serviceCharge);
+      const gst = periods.reduce<Prisma.Decimal>((a, p) => a.add(p.gst), meals.gst);
+      const rent = {
+        ...r.rent,
+        periods,
+        ...(listRate ? { listRate, rate: round2(toDecimal(listRate).mul(share)).toFixed(2) } : {}),
+      };
+      return { ...r, rent, subtotal, accommodationNet, mealsNet, serviceCharge, gst, total: subtotal.add(serviceCharge).add(gst) };
+    }
     const { serviceCharge, gst } = roomStayTax({
       accommodation: accommodationNet,
       meals: mealsNet,

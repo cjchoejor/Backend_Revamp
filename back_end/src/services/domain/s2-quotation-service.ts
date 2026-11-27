@@ -864,10 +864,8 @@ async function prepareQuotationDraft(
 
     // An apartment let monthly or weekly is priced by its rent, not by the night (2026-11-25); the rent
     // is the server's, from the booking's dates, plan and apartments — never from the desk.
+    // A discount comes off an apartment's rent as off any room's net (2026-11-27), period by period.
     const rentByRoom = apartmentRent;
-    if (rentByRoom.size && requested && ((requested.discountPercent ?? 0) > 0 || (requested.discountAmount ?? 0) > 0)) {
-      throw new ValidationError("A discount on an apartment's rent is not possible yet — take the discount off, or agree the rent on the admin console");
-    }
     const rooms = input.roomCompositions.map((c) => {
       const compositionInput: RoomCompositionInput = {
         rent: rentByRoom.get(c.roomId) ?? null,

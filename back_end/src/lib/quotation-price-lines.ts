@@ -180,15 +180,17 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
     : [`Apartment ${rent.unitLabel}`, rent.packageName, rooms, guests].filter(Boolean).join(" · ");
   const whole = rent.periods.filter((p) => p.whole);
   const part = rent.periods.filter((p) => !p.whole);
+  // The rent before a booking discount (2026-11-27): the rows are the stay before it, as any room's are.
   const cents = (v: string) => Math.round(Number(v) * 100);
+  const before = (p: (typeof rent.periods)[number]) => p.listNet ?? p.net;
   const lines: PriceLine[] = [];
   if (whole.length) {
-    const amount = whole.reduce((t, p) => t + cents(p.net), 0) / 100;
+    const amount = whole.reduce((t, p) => t + cents(before(p)), 0) / 100;
     lines.push({
       dates: labelRoomNights(nightsFromTo(whole[0].from, whole[whole.length - 1].to), mode),
       description: `${name} · let ${rent.plan === "MONTHLY" ? "monthly" : "weekly"}`,
       qty: `${many ? `${k} × ` : ""}${whole.length} ${word}${whole.length === 1 ? "" : "s"}`,
-      rate: Number(whole[0].net),
+      rate: Number(before(whole[0])),
       amount: amount * k,
       ...(r.lead ? { lead: r.lead } : {}),
     });
@@ -201,7 +203,7 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
         : `${name} · ${p.nights} of a ${word}'s ${p.ofNights} nights`,
       qty: `${many ? `${k} × ` : ""}${p.nights} night${p.nights === 1 ? "" : "s"}`,
       rate: null,
-      amount: (cents(p.net) / 100) * k,
+      amount: (cents(before(p)) / 100) * k,
       ...(whole.length ? { indent: true } : r.lead ? { lead: r.lead } : {}),
     });
   }

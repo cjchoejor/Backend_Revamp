@@ -123,6 +123,12 @@ export type PreviewRoomLine = {
   gst: number;
   /** Tax-inclusive total for this room, before any booking discount. */
   total: number;
+  /** This room's net, service charge, GST and total once the booking discount is off (2026-11-27);
+   *  the same as the figures above with no discount. */
+  payableSubtotal: number;
+  payableServiceCharge: number;
+  payableGst: number;
+  payableTotal: number;
   isFoc: boolean;
   /** True when per-date meal plans mean this room's meals are not one multiplication. */
   hasNightMealOverrides: boolean;
@@ -492,6 +498,13 @@ export async function buildQuotationPreview(
   });
 
   const totals = computeQuotationCompositionTotals(priced);
+  // The discount is measured against the grand total, in whichever way the operator expressed it.
+  // Exactly the helper the draft applies, so a previewed discount and a generated one cannot
+  // come out differently.
+  const applied = applyBookingDiscountToTotals(totals, priced, {
+    percent: input.discount?.percent ?? null,
+    amount: input.discount?.amount ?? null,
+  });
 
   // Column accumulators — summed as Decimals so the Σ row is exact, not a float re-sum.
   let colRoom = ZERO;
@@ -533,6 +546,10 @@ export async function buildQuotationPreview(
       serviceCharge: n2(r.serviceCharge),
       gst: n2(r.gst),
       total: n2(r.total),
+      payableSubtotal: n2(applied?.totals.perRoom[i]?.subtotal ?? r.subtotal),
+      payableServiceCharge: n2(applied?.totals.perRoom[i]?.serviceCharge ?? r.serviceCharge),
+      payableGst: n2(applied?.totals.perRoom[i]?.gst ?? r.gst),
+      payableTotal: n2(applied?.totals.perRoom[i]?.total ?? r.total),
       isFoc: input.roomCompositions[i]?.isFoc === true,
       hasNightMealOverrides: r.perNightMealBreakdown.some((b) => b.overridden),
       rent: r.rent,
@@ -583,14 +600,6 @@ export async function buildQuotationPreview(
   });
   // The system's rooms by their type, counted; a room given by number by its number (2026-10-30).
   const lines: PriceLine[] = buildDeskPriceLines(lineRooms);
-
-  // The discount is measured against the grand total, in whichever way the operator expressed it.
-  // Exactly the helper the draft applies, so a previewed discount and a generated one cannot
-  // come out differently.
-  const applied = applyBookingDiscountToTotals(totals, priced, {
-    percent: input.discount?.percent ?? null,
-    amount: input.discount?.amount ?? null,
-  });
 
   return {
     entryId: entry.id,
