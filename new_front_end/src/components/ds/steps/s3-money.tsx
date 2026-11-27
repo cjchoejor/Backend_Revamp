@@ -902,7 +902,7 @@ function AdvanceDialog({
 }
 
 /** One question in a box that asks one thing at a time: its number (a tick once answered), its label, its answer. */
-function Ask({
+export function Ask({
   n,
   done,
   optional,

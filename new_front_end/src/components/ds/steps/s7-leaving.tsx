@@ -68,6 +68,7 @@ import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 import type { EntryDetail } from "@/types/api";
 import { Choice, DsDialog, NotNow, StepCard, SubTabs, Tool, atLeast, toastRefusal, useRefreshEntry } from "./kit";
 import { PartDone, PartHead } from "./s7-extend";
+import { Ask } from "./s3-money";
 
 const nightsWord = (n: number) => `${n} night${n === 1 ? "" : "s"}`;
 const roomsWord = (nos: Array<string | null>) => (nos.length === 1 ? `Room ${nos[0]}` : `Rooms ${nos.join(", ")}`);
@@ -995,13 +996,18 @@ export function RoomsLeavingCard({ entry, all = false }: { entry: EntryDetail; a
 type GroupDraft = { adults: string; kids: string[]; title: string; name: string; phone: string; comps: RoomCompositionInput[]; compsKey: string };
 const EMPTY_GROUP: GroupDraft = { adults: "", kids: [], title: "", name: "", phone: "", comps: [], compsKey: "" };
 type AddDraft = {
-  v: 2;
+  v: 3;
   at: number;
-  /** The day they arrive and the day they leave ("" until changed: today and the group's check-out). */
+  /**
+   * When they come, asked first (2026-11-27, operator: "yes take them to check in means guest is at
+   * front, so that would mean it should take the current date as check in"): here now, later today, or
+   * another day — whose date is `arrive`.
+   */
+  when: "NOW" | "LATER" | "DAY" | null;
   arrive: string;
+  /** When they leave: with the group, or another day — whose date is `leave`. */
+  until: "GROUP" | "DAY" | null;
   leave: string;
-  /** Arriving today: at the desk now, or later today. */
-  hereNow: "YES" | "LATER" | null;
   picked: string[];
   /** A room leaving before the others keeps its own day. */
   leaveOf: Record<string, string>;
@@ -1009,19 +1015,19 @@ type AddDraft = {
   docs: "NOW" | "LATER" | null;
   reason: string;
 };
-const EMPTY_ADD: AddDraft = { v: 2, at: 1, arrive: "", leave: "", hereNow: null, picked: [], leaveOf: {}, groups: {}, docs: null, reason: "" };
+const EMPTY_ADD: AddDraft = { v: 3, at: 1, when: null, arrive: "", until: null, leave: "", picked: [], leaveOf: {}, groups: {}, docs: null, reason: "" };
 const draftKey = (entryId: string) => `desk:add-room:${entryId}`;
 function readDraft(entryId: string): AddDraft {
   try {
     const raw = window.localStorage.getItem(draftKey(entryId));
     if (!raw) return EMPTY_ADD;
     const d = JSON.parse(raw) as Partial<AddDraft>;
-    // A draft of the form before 27 Nov (one group, no dates) is started again.
-    if (d.v !== 2) return EMPTY_ADD;
+    // A draft of an earlier form is started again.
+    if (d.v !== 3) return EMPTY_ADD;
     return {
       ...EMPTY_ADD,
       ...d,
-      v: 2,
+      v: 3,
       picked: Array.isArray(d.picked) ? d.picked : [],
       leaveOf: d.leaveOf && typeof d.leaveOf === "object" ? d.leaveOf : {},
       groups: d.groups && typeof d.groups === "object" ? d.groups : {},
@@ -1344,9 +1350,13 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     reveal(idOf(n));
   };
 
+  // What the preview is asked: another day's date, and a leaving day of their own; else the server's
+  // defaults (today, and the group's check-out).
+  const askArrive = d.when === "DAY" && d.arrive ? d.arrive : null;
+  const askLeave = d.until === "DAY" && d.leave ? d.leave : null;
   const q = useQuery({
-    queryKey: ["add-room-preview", entry.id, d.arrive, d.leave],
-    queryFn: () => previewAddRoom(session!, entry.id, { arrive: d.arrive || null, leave: d.leave || null }),
+    queryKey: ["add-room-preview", entry.id, askArrive, askLeave],
+    queryFn: () => previewAddRoom(session!, entry.id, { arrive: askArrive, leave: askLeave }),
     enabled: !!session && entry.currentStage === "S7",
     staleTime: 0,
     placeholderData: (prev) => prev,
@@ -1354,10 +1364,14 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   const policy = useQuery({ queryKey: ["child-policy"], queryFn: () => getChildPolicy(session!), enabled: !!session, staleTime: 5 * 60_000 });
   const childMaxAge = policy.data?.ageBands.childMaxAge ?? 10;
   const p: AddRoomPreview | null = q.data ?? null;
-  const arrive = d.arrive || p?.arrive || "";
-  const leave = d.leave || p?.leave || "";
   const today = p?.today ?? "";
+  const groupOut = p?.checkOut ?? "";
+  const arrive = d.when === "DAY" ? d.arrive : today;
+  // "With the group" only while the group is still here after they come.
+  const withGroupOk = !!groupOut && (!arrive || groupOut > arrive);
+  const leave = d.until === "GROUP" && withGroupOk ? groupOut : d.until === "DAY" ? d.leave : "";
   const arrivesToday = !!arrive && arrive === today;
+  const hereNow = d.when === "NOW";
 
   // Memoised (2026-11-26): a fresh array each draw made the price table re-report its rows, which drew
   // this again — "Maximum update depth exceeded".
@@ -1457,7 +1471,19 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jComps, joinShape?.roomIds.join(","), jAdults, jg.kids.join(","), policy.data]);
 
-  const part1Why = !p ? "Asking the house" : p.datesWrong ? p.datesWrong : arrivesToday && !d.hereNow ? "Say whether they are at the desk now" : null;
+  const part1Why = !p
+    ? "Asking the house"
+    : !d.when
+      ? "Say when they come"
+      : d.when === "DAY" && !d.arrive
+        ? "Pick the day they arrive"
+        : !d.until || (d.until === "GROUP" && !withGroupOk)
+          ? "Say when they leave"
+          : d.until === "DAY" && !d.leave
+            ? "Pick the day they leave"
+            : p.datesWrong
+              ? p.datesWrong
+              : null;
   const part2Why = !picked.length ? "Tick a free room" : null;
   const phoneBad = (v: string) => problemOfPhone(phoneRules, v);
   const part3Why = shapes.map((sh) => guestsWhy(sh, groupOf(sh.day), childMaxAge, phoneBad)).find(Boolean) ?? null;
@@ -1480,7 +1506,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     mutationFn: () =>
       addRooms(session!, entry.id, {
         arrive,
-        hereNow: arrivesToday && d.hereNow === "YES",
+        hereNow,
         stays: shapes.map((sh) => {
           const g = groupOf(sh.day);
           const c = compsOf(sh);
@@ -1587,34 +1613,60 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
             n={PART.when}
             title="When they come"
             state={stateOf(PART.when)}
-            summary={`Arrive ${fmtDay(arrive)}${arrivesToday ? (d.hereNow === "YES" ? " · at the desk now" : " · later today") : ""} · leave ${fmtDay(leave)}`}
+            summary={`${hereNow ? "Here now" : d.when === "LATER" ? "Later today" : arrive ? `Arrive ${fmtDay(arrive)}` : ""} · ${
+              d.until === "GROUP" ? `leave with the group, ${fmtDay(groupOut)}` : leave ? `leave ${fmtDay(leave)}` : ""
+            }`}
             onEdit={() => goTo(PART.when)}
           />
           {stateOf(PART.when) === "open" ? (
             <>
-              <div className="form3">
-                <div className="field">
-                  <label>They arrive on</label>
-                  <DateInput value={arrive} min={today} max={p.arriveLatest ?? undefined} onChange={(e) => set({ arrive: e.target.value, hereNow: null })} />
-                </div>
-                <div className="field">
-                  <label>They leave on</label>
-                  <DateInput value={leave} min={arrive || today} max={p.leaveLatest} onChange={(e) => set({ leave: e.target.value })} />
-                </div>
-              </div>
-              {arrivesToday ? (
-                <div className="field">
-                  <label>Are they at the desk now?</label>
+              <div className="qsteps">
+                <Ask n={1} done={!!d.when && (d.when !== "DAY" || !!d.arrive)} label="When do they come?">
                   <Choice
                     options={[
-                      ["YES", "Yes — take them to Check-in"],
+                      ["NOW", "They're here now — check them in"],
                       ["LATER", "Later today"],
+                      ["DAY", "Another day"],
                     ] as const}
-                    value={d.hereNow}
-                    onChange={(v) => set({ hereNow: v })}
+                    value={d.when}
+                    onChange={(v) => set({ when: v, ...(v !== "DAY" ? { arrive: "" } : {}) })}
                   />
-                </div>
-              ) : null}
+                  {d.when === "DAY" ? (
+                    <div className="field" style={{ marginTop: "var(--s2)", maxWidth: 260 }}>
+                      <label>They arrive on</label>
+                      <DateInput
+                        value={d.arrive}
+                        min={today ? new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : undefined}
+                        max={p.arriveLatest ?? undefined}
+                        onChange={(e) => set({ arrive: e.target.value })}
+                      />
+                    </div>
+                  ) : null}
+                </Ask>
+                {d.when && (d.when !== "DAY" || d.arrive) ? (
+                  <Ask n={2} done={!!leave} label="When do they leave?">
+                    <Choice
+                      options={[
+                        ...(withGroupOk ? [["GROUP", `With the group · ${fmtDay(groupOut)}`] as const] : []),
+                        ["DAY", "Another day"] as const,
+                      ]}
+                      value={d.until === "GROUP" && !withGroupOk ? null : d.until}
+                      onChange={(v) => set({ until: v as "GROUP" | "DAY" })}
+                    />
+                    {d.until === "DAY" ? (
+                      <div className="field" style={{ marginTop: "var(--s2)", maxWidth: 260 }}>
+                        <label>They leave on</label>
+                        <DateInput
+                          value={d.leave}
+                          min={arrive ? new Date(Date.parse(`${arrive}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10) : undefined}
+                          max={p.leaveLatest}
+                          onChange={(e) => set({ leave: e.target.value })}
+                        />
+                      </div>
+                    ) : null}
+                  </Ask>
+                ) : null}
+              </div>
               {p.datesWrong ? (
                 <p className="sm stop-ink" role="alert" style={{ margin: 0 }}>
                   {p.datesWrong}
@@ -1868,7 +1920,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
               </ul>
               {ownCount ? (
                 <p className="sm" style={{ margin: 0 }}>
-                  {arrivesToday && d.hereNow === "YES"
+                  {hereNow
                     ? "Each booking of its own is taken to Check-in, its rooms handed out — take their ID and registration card there and hand over the key."
                     : arrivalOpen
                       ? "Each booking of its own waits at Arrival with its rooms handed out — check them in when they come."
@@ -1922,7 +1974,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
               <li key={sh.day}>
                 {roomsWord(sh.rows.map((r) => r.roomNumber))} — a booking of its own on this enquiry for {g.name.trim()}, {fmtDay(arrive)} → {fmtDay(sh.day)}, with {guests}. It takes the
                 group&rsquo;s package and who pays, and is{" "}
-                {arrivesToday && d.hereNow === "YES" ? "taken to Check-in" : arrivalOpen ? "taken to Arrival, its rooms handed out" : `reserved, and goes to Arrival on ${fmtDay(p.arrivalOpens)}`}.
+                {hereNow ? "taken to Check-in" : arrivalOpen ? "taken to Arrival, its rooms handed out" : `reserved, and goes to Arrival on ${fmtDay(p.arrivalOpens)}`}.
               </li>
             );
           })}
