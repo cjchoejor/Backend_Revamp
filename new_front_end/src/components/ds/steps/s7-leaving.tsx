@@ -12,11 +12,13 @@
  *    the server's. Who records it and who may waive the fee is the admin console's.
  *  - `LeavingEarly` (mode REMOVE): the hotel booked a room by mistake — the room comes off with no fee.
  *    Whoever the admin console lets removes it; anyone else asks them (`RoomRemovalAsks`).
- *  - `AddRoom`: on the check-in day, rooms join the booking for the whole stay — the rooms, the new
- *    guests, the price on the negotiation table, their documents now or later — then the booking walks
- *    the governed way (papers made again, held for the desk).
+ *  - `AddRoom`: friends who join the group — today, tomorrow or later, one room or several, leaving
+ *    with the group or on another day. On the check-in day rooms with the group's dates join the booking
+ *    (papers made again, held for the desk); every other group of rooms, by the day it leaves, is a
+ *    booking of its own on the same enquiry in the friend's name, taken to Check-in when they are here.
  *  - `RoomsEditPane`: Add a room · Remove a room, as sub-tabs.
  */
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -25,6 +27,11 @@ import { useSession } from "@/hooks/use-session";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useMayApprove } from "@/hooks/use-approvals";
 import { DateInput } from "@/components/ds/date-input";
+import { PersonName } from "@/components/ds/person-name";
+import { PhoneField } from "@/components/ds/phone-field";
+import { usePhoneRules } from "@/hooks/use-phone-rules";
+import { problemOfPhone } from "@/lib/ds/phone";
+import { STEP_NAMES } from "@/lib/ds/steps";
 import { Help } from "@/components/ds/help";
 import { StayDates } from "@/components/ds/stay-dates";
 import { BankFields, useBankEntry } from "@/components/ds/bank-fields";
@@ -46,6 +53,7 @@ import {
   type AddRoomHolder,
   type AddRoomRow,
   type AddRoomsOutcome,
+  type AddRoomPreview,
   type LeavingFigures,
   type LeavingOutcome,
   type RoomDepartureRow,
@@ -978,42 +986,205 @@ export function RoomsLeavingCard({ entry, all = false }: { entry: EntryDetail; a
   );
 }
 
-/* ------------------------------------------------------------------ rooms added on the check-in day */
+/* ------------------------------------------------------------------ rooms added to a stay in house */
 
-// The table's rows are kept with the draft (2026-11-26): a reload at Their documents must still add what
-// was seated and priced. `compsKey` says which rooms and guests they were seated for.
+// One group of rooms — the rooms leaving on one day — with its guests and its table, kept with the
+// draft (2026-11-26): a reload must still add what was seated and priced. `compsKey` says which rooms,
+// guests and dates the rows were seated for.
+type GroupDraft = { adults: string; kids: string[]; title: string; name: string; phone: string; comps: RoomCompositionInput[]; compsKey: string };
+const EMPTY_GROUP: GroupDraft = { adults: "", kids: [], title: "", name: "", phone: "", comps: [], compsKey: "" };
 type AddDraft = {
+  v: 2;
   at: number;
+  /** The day they arrive and the day they leave ("" until changed: today and the group's check-out). */
+  arrive: string;
+  leave: string;
+  /** Arriving today: at the desk now, or later today. */
+  hereNow: "YES" | "LATER" | null;
   picked: string[];
-  adults: string;
-  kids: string[];
+  /** A room leaving before the others keeps its own day. */
+  leaveOf: Record<string, string>;
+  groups: Record<string, GroupDraft>;
   docs: "NOW" | "LATER" | null;
   reason: string;
-  comps: RoomCompositionInput[];
-  compsKey: string;
 };
-const EMPTY_ADD: AddDraft = { at: 1, picked: [], adults: "", kids: [], docs: null, reason: "", comps: [], compsKey: "" };
-const planKeyOf = (x: Pick<AddDraft, "picked" | "adults" | "kids">) => `${x.picked.join(",")}|${x.adults}|${x.kids.join(",")}`;
+const EMPTY_ADD: AddDraft = { v: 2, at: 1, arrive: "", leave: "", hereNow: null, picked: [], leaveOf: {}, groups: {}, docs: null, reason: "" };
 const draftKey = (entryId: string) => `desk:add-room:${entryId}`;
 function readDraft(entryId: string): AddDraft {
   try {
     const raw = window.localStorage.getItem(draftKey(entryId));
     if (!raw) return EMPTY_ADD;
     const d = JSON.parse(raw) as Partial<AddDraft>;
+    // A draft of the form before 27 Nov (one group, no dates) is started again.
+    if (d.v !== 2) return EMPTY_ADD;
     return {
       ...EMPTY_ADD,
       ...d,
+      v: 2,
       picked: Array.isArray(d.picked) ? d.picked : [],
-      kids: Array.isArray(d.kids) ? d.kids : [],
-      comps: Array.isArray(d.comps) ? d.comps : [],
-      compsKey: typeof d.compsKey === "string" ? d.compsKey : "",
+      leaveOf: d.leaveOf && typeof d.leaveOf === "object" ? d.leaveOf : {},
+      groups: d.groups && typeof d.groups === "object" ? d.groups : {},
     };
   } catch {
     return EMPTY_ADD;
   }
 }
+const compsKeyOf = (roomIds: string[], g: Pick<GroupDraft, "adults" | "kids">, arrive: string, day: string) => `${roomIds.join(",")}|${g.adults}|${g.kids.join(",")}|${arrive}|${day}`;
+
+/** The ages as numbers, the same array for the same typed ages (the price table re-seats on a new one). */
+const agesCache = new WeakMap<string[], number[]>();
+const agesOf = (kids: string[]) => {
+  let a = agesCache.get(kids);
+  if (!a) {
+    a = kids.map((k) => Number(k));
+    agesCache.set(kids, a);
+  }
+  return a;
+};
 
 const STATUS_WORD: Record<string, string> = { FREE: "Free", RESERVED: "Reserved", HELD: "Held", BLOCKED: "Out of service", MAINTENANCE: "Maintenance" };
+const stepWord = (stage: string | null) => (stage && /^S[1-9]$/.test(stage) ? STEP_NAMES[Number(stage.slice(1)) - 1] : stage ?? "—");
+
+/** A group's shape: its day, its rooms, whether it joins the booking, each room's dates for the table. */
+type GroupShape = { day: string; roomIds: string[]; rows: AddRoomRow[]; joins: boolean; roomDates: Record<string, { label: string; nights: number }> };
+
+/** What a group's rooms sleep, and what its guests take of it. */
+function capsOf(rows: AddRoomRow[], g: GroupDraft, childMaxAge: number) {
+  // A room type's maxCapacity is its ceiling with the extra bed already in it (the hotel's capacity rule);
+  // guests aged 11 and over count against it, children under 11 against maxChildren besides.
+  const sleepsMax = rows.reduce((n, r) => n + (r.maxCapacity ?? 0), 0);
+  const kidsMax = rows.reduce((n, r) => n + (r.maxChildren ?? 0), 0);
+  const adults = Number(g.adults || 0);
+  const agesKnown = g.kids.map((k) => (k === "" ? null : Number(k)));
+  const olderKids = agesKnown.filter((a) => a != null && a > childMaxAge).length;
+  const youngKids = agesKnown.filter((a) => a != null && a <= childMaxAge).length;
+  return {
+    sleepsMax,
+    kidsMax,
+    adults,
+    agesKnown,
+    olderKids,
+    youngKids,
+    /** The most adults the rooms take beside the children aged 11 and over already named. */
+    adultsRoom: Math.max(0, sleepsMax - olderKids),
+    /** The most children: the places adults leave, plus the rooms' children under 11. */
+    kidsRoom: Math.min(8, Math.max(0, sleepsMax - adults) + kidsMax),
+  };
+}
+
+function guestsWhy(shape: GroupShape, g: GroupDraft, childMaxAge: number, phoneBad: (v: string) => string | null): string | null {
+  const c = capsOf(shape.rows, g, childMaxAge);
+  const word = roomsWord(shape.rows.map((r) => r.roomNumber));
+  const plural = shape.rows.length !== 1;
+  if (!shape.joins && !g.name.trim()) return `Type whom ${word} ${plural ? "are" : "is"} for`;
+  if (!shape.joins && g.phone.trim() && phoneBad(g.phone)) return `${g.name.trim() || "Their"} phone: ${phoneBad(g.phone)}`;
+  if (!c.adults && !g.kids.length) return `Say who sleeps in ${word}`;
+  if (!g.kids.every((k) => k.trim() !== "" && Number(k) >= 0 && Number(k) <= 17)) return "Pick each child's age";
+  if (c.adults + c.olderKids > c.sleepsMax) return `${word} sleep${plural ? "" : "s"} at most ${c.sleepsMax} aged 11 and over — ${c.adults + c.olderKids} asked`;
+  if (c.youngKids > c.kidsMax) return `${word} take${plural ? "" : "s"} at most ${c.kidsMax} under 11 — ${c.youngKids} asked`;
+  if (c.adults + g.kids.length < shape.rows.length) return `Each room needs a guest — ${shape.rows.length} rooms, ${c.adults + g.kids.length} guests`;
+  return null;
+}
+
+/** "Rooms 301, 302 · until 30 Nov · join this booking" — whose the block is. */
+function GroupHead({ shape }: { shape: GroupShape }) {
+  const word = roomsWord(shape.rows.map((r) => r.roomNumber));
+  return (
+    <div className="ar-group-h">
+      <b>{word}</b>
+      <span className="sm">until {fmtDay(shape.day)}</span>
+      <span className={`ar-kind${shape.joins ? " joins" : ""}`}>{shape.joins ? "Joins this booking" : "A booking of its own"}</span>
+    </div>
+  );
+}
+
+/** Whose booking (a booking of its own), then who sleeps in the group's rooms — each a dropdown held to what fits. */
+function GroupGuests({ shape, g, childMaxAge, set, entryId }: { shape: GroupShape; g: GroupDraft; childMaxAge: number; set: (patch: Partial<GroupDraft>) => void; entryId: string }) {
+  const c = capsOf(shape.rows, g, childMaxAge);
+  const word = roomsWord(shape.rows.map((r) => r.roomNumber));
+  const plural = shape.rows.length !== 1;
+  const sleepsId = `ar-sleeps-${entryId}-${shape.day}`;
+  return (
+    <div className="ar-group" data-group={shape.day}>
+      <GroupHead shape={shape} />
+      {!shape.joins ? (
+        <div className="form3">
+          <PersonName
+            title={g.title}
+            name={g.name}
+            onTitle={(title) => set({ title })}
+            onName={(name) => set({ name })}
+            nameLabel="Whose booking"
+            namePlaceholder="The friend's name"
+            required
+          />
+          <div className="field">
+            <label>
+              Their phone <span className="muted">· optional</span>
+            </label>
+            <PhoneField value={g.phone} onChange={(phone) => set({ phone })} ariaLabel="Their phone" />
+          </div>
+        </div>
+      ) : null}
+      <p className="sm" id={sleepsId} style={{ margin: 0 }}>
+        {word} sleep{plural ? "" : "s"} up to {c.sleepsMax} guest{c.sleepsMax === 1 ? "" : "s"} aged 11 and over, and {c.kidsMax} {c.kidsMax === 1 ? "child" : "children"} under 11 besides.
+      </p>
+      <div className="form3">
+        <div className="field">
+          <label>Adults</label>
+          <select className="input" value={g.adults} aria-describedby={sleepsId} onChange={(e) => set({ adults: e.target.value })}>
+            <option value="">Pick how many…</option>
+            {Array.from({ length: c.sleepsMax + 1 }, (_, n) => n).map((n) => (
+              <option key={n} value={String(n)} disabled={n > c.adultsRoom}>
+                {n}
+                {n > c.adultsRoom ? ` · ${c.olderKids ? `a child aged 11+ takes ${c.olderKids === 1 ? "a place" : "places"}` : "the room is full"}` : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label>Children</label>
+          <select className="input" value={String(g.kids.length)} onChange={(e) => set({ kids: Array.from({ length: Number(e.target.value) }, (_, i) => g.kids[i] ?? "") })}>
+            {Array.from({ length: Math.min(8, c.sleepsMax + c.kidsMax) + 1 }, (_, n) => n).map((n) => (
+              <option key={n} value={String(n)} disabled={n > c.kidsRoom}>
+                {n}
+                {n > c.kidsRoom ? " · no place left" : ""}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {g.kids.length ? (
+        <div className="form3">
+          {g.kids.map((k, i) => {
+            const mine = c.agesKnown[i];
+            const olderOthers = c.adults + c.olderKids - (mine != null && mine > childMaxAge ? 1 : 0);
+            const youngOthers = c.youngKids - (mine != null && mine <= childMaxAge ? 1 : 0);
+            return (
+              <div key={i} className="field">
+                <label>Child {i + 1}&rsquo;s age</label>
+                <select className="input" value={k} onChange={(e) => set({ kids: g.kids.map((x, j) => (j === i ? e.target.value : x)) })}>
+                  <option value="">Pick the age…</option>
+                  {Array.from({ length: 18 }, (_, a) => a).map((a) => {
+                    const older = a > childMaxAge;
+                    const shut = older ? olderOthers >= c.sleepsMax : youngOthers >= c.kidsMax;
+                    return (
+                      <option key={a} value={String(a)} disabled={shut}>
+                        {a}
+                        {older ? " · counts as an adult" : ""}
+                        {shut ? (older ? " — the room is full" : ` — ${c.kidsMax === 1 ? "one child" : `${c.kidsMax} children`} under 11 at most`) : ""}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /** Move a booking that holds the room and has not arrived to another room (2026-11-26). */
 function MoveHolderDialog({ room, holder, onClose, onMove }: { room: AddRoomRow | null; holder: AddRoomHolder | null; onClose: () => void; onMove: (legs: RoomMoveLegInput[]) => void }) {
@@ -1051,10 +1222,92 @@ function MoveHolderDialog({ room, holder, onClose, onMove }: { room: AddRoomRow 
   );
 }
 
+/** What was made, booking by booking, with the way to each. */
+function AddedResult({ done, onAgain }: { done: AddRoomsOutcome; onAgain: () => void }) {
+  const j = done.joined;
+  return (
+    <div className="leaving" data-add-room>
+      {j ? (
+        <div className={`notice ${j.outcome.walk.blocked ? "next" : "paid"}`} role="status" data-add-room-done>
+          <span>
+            <b>{roomsWord(j.roomNumbers)} added to this booking</b> · {j.party.adultCount} adult{j.party.adultCount === 1 ? "" : "s"}
+            {j.party.childCount ? `, ${j.party.childCount} child${j.party.childCount === 1 ? "" : "ren"}` : ""} now
+            {j.outcome.pricing.newTotal != null ? ` · the stay ${money(j.outcome.pricing.priorTotal)} → ${money(j.outcome.pricing.newTotal)}` : ""}
+            <br />
+            <span className="sm">
+              The quotation was made again (the old one replaced); the voucher and the proforma were made again and wait for you under Papers. Tonight is charged for the new{" "}
+              {j.roomNumbers.length === 1 ? "room" : "rooms"}; hand over the keys from Guests and rooms › Keys.
+            </span>
+            {j.outcome.walk.blocked ? (
+              <>
+                <br />
+                <span className="sm warn-ink">
+                  It stopped at {j.outcome.walk.blocked.atStep.toLowerCase().replace(/_/g, " ")}: {j.outcome.walk.blocked.message}
+                </span>
+              </>
+            ) : null}
+          </span>
+        </div>
+      ) : null}
+      {done.bookings.map((b, i) => (
+        <div key={b.entryId ?? i} className={`notice ${b.failed || b.blocked ? "next" : "paid"} ar-made`} role="status" data-add-room-booking={b.entryId ?? ""}>
+          <span>
+            <b>
+              {roomsWord(b.roomNumbers)} for {b.guestName ?? "the guest"}
+            </b>{" "}
+            · {fmtDay(b.checkIn)} → {fmtDay(b.checkOut)}
+            {b.entryId ? ` · ${b.entryId}` : ""}
+            <br />
+            {b.failed ? (
+              <span className="sm warn-ink">Not made: {b.failed}</span>
+            ) : (
+              <span className="sm">
+                {b.atCheckIn
+                  ? "A booking of its own on this enquiry, now at Check-in — take their ID and registration card there and hand over the key."
+                  : b.reachedStage === "S5"
+                    ? "A booking of its own on this enquiry, at Arrival with the rooms handed out — check them in when they come."
+                    : b.reachedStage === "S4"
+                      ? "A booking of its own on this enquiry, reserved — Arrival opens nearer their day."
+                      : `A booking of its own on this enquiry, at ${stepWord(b.reachedStage)}.`}
+                {b.quotationTotal != null ? ` Priced at ${money(b.quotationTotal)}.` : ""} Its voucher and proforma wait under its Papers; nothing was sent.
+                {b.blocked ? (
+                  <>
+                    <br />
+                    <span className="warn-ink">
+                      It stopped at {b.blocked.atStep.toLowerCase().replace(/_/g, " ")}: {b.blocked.message}
+                    </span>
+                  </>
+                ) : null}
+                {b.notes.map((n) => (
+                  <span key={n}>
+                    <br />
+                    {n}
+                  </span>
+                ))}
+              </span>
+            )}
+          </span>
+          {b.entryId ? (
+            <Link className="btn btn-secondary" href={`/bookings/${b.entryId}`}>
+              Open the booking
+            </Link>
+          ) : null}
+        </div>
+      ))}
+      <div className="ext-go">
+        <Button kind="secondary" onClick={onAgain}>
+          Add another room
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function AddRoom({ entry }: { entry: EntryDetail }) {
   const { session } = useSession();
   const refresh = useRefreshEntry(entry.id);
   const qc = useQueryClient();
+  const phoneRules = usePhoneRules();
   const rule = useMayApprove("ROOM_ADD", atLeast(session?.actorLevel, "L3"));
   const rateMay = atLeast(session?.actorLevel, "L3");
   const [d, setD] = useState<AddDraft>(EMPTY_ADD);
@@ -1074,18 +1327,11 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     }
   }, [d, entry.id]);
   const set = (patch: Partial<AddDraft>) => setD((x) => ({ ...x, ...patch }));
-  // The rows count only for the rooms and guests they were seated for.
-  const comps = useMemo(() => (d.compsKey === planKeyOf(d) ? d.comps : []), [d]);
-  const setComps = useCallback(
-    (c: RoomCompositionInput[]) =>
-      setD((x) => {
-        const key = planKeyOf(x);
-        if (x.compsKey === key && JSON.stringify(x.comps) === JSON.stringify(c)) return x;
-        return { ...x, comps: c, compsKey: key };
-      }),
+  const setGroup = useCallback(
+    (day: string, patch: Partial<GroupDraft>) => setD((x) => ({ ...x, groups: { ...x.groups, [day]: { ...(x.groups[day] ?? EMPTY_GROUP), ...patch } } })),
     [],
   );
-  const [faults, setFaults] = useState<string[]>([]);
+  const [faultsOf, setFaultsOf] = useState<Record<string, string[]>>({});
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<AddRoomsOutcome | null>(null);
   const [moveFor, setMoveFor] = useState<{ room: AddRoomRow; holder: AddRoomHolder } | null>(null);
@@ -1097,45 +1343,109 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   };
 
   const q = useQuery({
-    queryKey: ["add-room-preview", entry.id],
-    queryFn: () => previewAddRoom(session!, entry.id),
+    queryKey: ["add-room-preview", entry.id, d.arrive, d.leave],
+    queryFn: () => previewAddRoom(session!, entry.id, { arrive: d.arrive || null, leave: d.leave || null }),
     enabled: !!session && entry.currentStage === "S7",
     staleTime: 0,
+    placeholderData: (prev) => prev,
   });
   const policy = useQuery({ queryKey: ["child-policy"], queryFn: () => getChildPolicy(session!), enabled: !!session, staleTime: 5 * 60_000 });
-  const p = q.data ?? null;
+  const childMaxAge = policy.data?.ageBands.childMaxAge ?? 10;
+  const p: AddRoomPreview | null = q.data ?? null;
+  const arrive = d.arrive || p?.arrive || "";
+  const leave = d.leave || p?.leave || "";
+  const today = p?.today ?? "";
+  const arrivesToday = !!arrive && arrive === today;
+
   // Memoised (2026-11-26): a fresh array each draw made the price table re-report its rows, which drew
   // this again — "Maximum update depth exceeded".
   const picked = useMemo(() => d.picked.filter((id) => p?.rooms.some((r) => r.roomId === id && r.selectable) ?? true), [d.picked, p]);
-  const pickedRows = (p?.rooms ?? []).filter((r) => picked.includes(r.roomId)).sort((a, b) => picked.indexOf(a.roomId) - picked.indexOf(b.roomId));
-  const adults = Number(d.adults || 0);
-  const ages = useMemo(() => d.kids.map((k) => Number(k)), [d.kids]);
-  const agesOk = d.kids.every((k) => k.trim() !== "" && Number(k) >= 0 && Number(k) <= 17);
-  const guests = adults + d.kids.length;
+  const pickedKey = picked.join(",");
+  const leaveOfKey = JSON.stringify(d.leaveOf);
+  // The groups: rooms leaving on one day share one; the rows stay the same arrays while only guests change.
+  const shapes: GroupShape[] = useMemo(() => {
+    if (!p || !leave) return [];
+    const byDay = new Map<string, string[]>();
+    for (const id of picked) {
+      const own = d.leaveOf[id];
+      // A room booked later in the window leaves on the day its next guest comes, at the latest.
+      const free = p.rooms.find((r) => r.roomId === id)?.freeUntil;
+      const last = free && free < leave ? free : leave;
+      const day = own && own > arrive && own <= last ? own : last;
+      byDay.set(day, [...(byDay.get(day) ?? []), id]);
+    }
+    return [...byDay.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([day, roomIds]) => {
+        const rows = roomIds.map((id) => p.rooms.find((r) => r.roomId === id)).filter((r): r is AddRoomRow => !!r);
+        const nights = Math.max(1, Math.round((Date.parse(`${day}T00:00:00Z`) - Date.parse(`${arrive}T00:00:00Z`)) / 86_400_000));
+        const roomDates: Record<string, { label: string; nights: number }> = {};
+        for (const id of roomIds) roomDates[id] = { label: `${fmtDay(arrive)} – ${fmtDay(day)}`, nights };
+        return { day, roomIds, rows, joins: p.joinsBooking && day === p.checkOut, roomDates };
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p, pickedKey, leaveOfKey, arrive, leave]);
+  const groupOf = (day: string) => d.groups[day] ?? EMPTY_GROUP;
+  const compsOf = (shape: GroupShape) => {
+    const g = groupOf(shape.day);
+    return g.compsKey === compsKeyOf(shape.roomIds, g, arrive, shape.day) ? g.comps : [];
+  };
+  // One handler per group, the same function each draw (the table reports through it from an effect).
+  const shapeDays = shapes.map((x) => x.day).join(",");
+  const onComps = useMemo(() => {
+    const out: Record<string, (c: RoomCompositionInput[]) => void> = {};
+    for (const sh of shapes) {
+      out[sh.day] = (c) =>
+        setD((x) => {
+          const g = x.groups[sh.day] ?? EMPTY_GROUP;
+          const key = compsKeyOf(sh.roomIds, g, x.arrive || arrive, sh.day);
+          if (g.compsKey === key && JSON.stringify(g.comps) === JSON.stringify(c)) return x;
+          return { ...x, groups: { ...x.groups, [sh.day]: { ...g, comps: c, compsKey: key } } };
+        });
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shapeDays, pickedKey, arrive]);
+  const onFaults = useMemo(() => {
+    const out: Record<string, (f: string[]) => void> = {};
+    for (const day of shapeDays.split(",").filter(Boolean)) {
+      out[day] = (f) => setFaultsOf((x) => (JSON.stringify(x[day] ?? []) === JSON.stringify(f) ? x : { ...x, [day]: f }));
+    }
+    return out;
+  }, [shapeDays]);
 
-  // The new guests, keyed as the party will key them once the rooms join the booking.
+  const joinShape = shapes.find((x) => x.joins) ?? null;
+  const hasJoin = !!joinShape;
+  const PART = { when: 1, rooms: 2, who: 3, price: 4, docs: hasJoin ? 5 : -1, add: hasJoin ? 6 : 5 };
+  const stateOf = (n: number): "open" | "done" | "waiting" => (d.at === n ? "open" : d.at > n ? "done" : "waiting");
+
+  // The joining group's guests, keyed as the party will key them once the rooms join the booking.
+  const jg = joinShape ? groupOf(joinShape.day) : EMPTY_GROUP;
+  const jAdults = Number(jg.adults || 0);
+  const jAges = agesOf(jg.kids);
   const n0 = entry.adultCount ?? 0;
   const k0 = (entry.childAges ?? []).length;
   const pendingSlots: PartySlot[] = useMemo(
     () => [
-      ...Array.from({ length: adults }, (_, i) => ({ key: `A${n0 + i}`, label: `Adult ${n0 + i + 1}`, placeholder: "Name as on the document" })),
-      ...ages.map((age, j) => ({ key: `K${k0 + j}`, label: `Child ${k0 + j + 1} · ${age}y`, sub: `${age}y`, placeholder: "Name as on the document" })),
+      ...Array.from({ length: jAdults }, (_, i) => ({ key: `A${n0 + i}`, label: `Adult ${n0 + i + 1}`, placeholder: "Name as on the document" })),
+      ...jAges.map((age, j) => ({ key: `K${k0 + j}`, label: `Child ${k0 + j + 1} · ${age}y`, sub: `${age}y`, placeholder: "Name as on the document" })),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [adults, d.kids.join(","), n0, k0],
+    [jAdults, jg.kids.join(","), n0, k0],
   );
+  const jComps = joinShape ? compsOf(joinShape) : [];
   // Which new room each new guest sleeps in — the table's own counts, band by band, in room order.
   const pendingRoomOf = useMemo(() => {
     const young = policy.data?.ageBands.youngChildMaxAge ?? 5;
     const child = policy.data?.ageBands.childMaxAge ?? 10;
     const pool = {
-      A: [...Array.from({ length: adults }, (_, i) => `A${n0 + i}`), ...ages.map((a, j) => (a > child ? `K${k0 + j}` : null)).filter((x): x is string => !!x)],
-      C: ages.map((a, j) => (a > young && a <= child ? `K${k0 + j}` : null)).filter((x): x is string => !!x),
-      U: ages.map((a, j) => (a <= young ? `K${k0 + j}` : null)).filter((x): x is string => !!x),
+      A: [...Array.from({ length: jAdults }, (_, i) => `A${n0 + i}`), ...jAges.map((a, j) => (a > child ? `K${k0 + j}` : null)).filter((x): x is string => !!x)],
+      C: jAges.map((a, j) => (a > young && a <= child ? `K${k0 + j}` : null)).filter((x): x is string => !!x),
+      U: jAges.map((a, j) => (a <= young ? `K${k0 + j}` : null)).filter((x): x is string => !!x),
     };
     const m = new Map<string, string>();
-    for (const roomId of picked) {
-      const c = comps.find((x) => x.roomId === roomId);
+    for (const roomId of joinShape?.roomIds ?? []) {
+      const c = jComps.find((x) => x.roomId === roomId);
       if (!c) continue;
       for (const k of pool.A.splice(0, c.adultCount ?? 0)) m.set(k, roomId);
       for (const k of pool.C.splice(0, c.cnb6To10Count ?? 0)) m.set(k, roomId);
@@ -1143,58 +1453,44 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     }
     return m;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [comps, picked.join(","), adults, d.kids.join(","), policy.data]);
+  }, [jComps, joinShape?.roomIds.join(","), jAdults, jg.kids.join(","), policy.data]);
 
-  const roomDates = useMemo(() => {
-    const out: Record<string, { label: string; nights: number }> = {};
-    if (p?.checkIn && p.checkOut) for (const id of picked) out[id] = { label: `${fmtDay(p.checkIn)} – ${fmtDay(p.checkOut)}`, nights: p.nights.length };
-    return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [p?.checkIn, p?.checkOut, picked.join(",")]);
-
-  const stateOf = (n: number): "open" | "done" | "waiting" => (d.at === n ? "open" : d.at > n ? "done" : "waiting");
-  const part1Ready = picked.length > 0;
-  // What the picked rooms sleep (2026-11-26, operator: "it shouldn't allow more than the max occupant"):
-  // guests aged 11 and over against the beds and extra beds, children under 11 against the rooms' children.
-  // A room type's maxCapacity is its ceiling with the extra bed already in it (the hotel's capacity
-  // rule); guests aged 11 and over count against it, children under 11 against maxChildren besides.
-  const sleepsMax = pickedRows.reduce((n, r) => n + (r.maxCapacity ?? 0), 0);
-  const kidsMax = pickedRows.reduce((n, r) => n + (r.maxChildren ?? 0), 0);
-  const childMaxAge = policy.data?.ageBands.childMaxAge ?? 10;
-  const agesKnown = d.kids.map((k) => (k === "" ? null : Number(k)));
-  const olderKids = agesKnown.filter((a) => a != null && a > childMaxAge).length;
-  const youngKids = agesKnown.filter((a) => a != null && a <= childMaxAge).length;
-  const grownUps = adults + olderKids;
-  const littleOnes = youngKids;
-  /** The most adults the rooms take beside the children aged 11 and over already named. */
-  const adultsRoom = Math.max(0, sleepsMax - olderKids);
-  /** The most children: the places adults leave, plus the rooms' children under 11. */
-  const kidsRoom = Math.min(8, Math.max(0, sleepsMax - adults) + kidsMax);
-  const roomsWordPicked = roomsWord(pickedRows.map((r) => r.roomNumber));
-  const part2Why = !adults && !d.kids.length
-    ? "Say who sleeps in the new rooms"
-    : !agesOk
-      ? "Pick each child's age"
-      : grownUps > sleepsMax
-        ? `${roomsWordPicked} sleep${pickedRows.length === 1 ? "s" : ""} at most ${sleepsMax} aged 11 and over — ${grownUps} asked`
-        : littleOnes > kidsMax
-          ? `${roomsWordPicked} take${pickedRows.length === 1 ? "s" : ""} at most ${kidsMax} under 11 — ${littleOnes} asked`
-          : guests < picked.length
-            ? `Each room needs a guest — ${picked.length} rooms, ${guests} guests`
-            : null;
-  const part3Why = !comps.length ? "Seat the new guests in the table" : faults.length ? faults[0] : null;
+  const part1Why = !p ? "Asking the house" : p.datesWrong ? p.datesWrong : arrivesToday && !d.hereNow ? "Say whether they are at the desk now" : null;
+  const part2Why = !picked.length ? "Tick a free room" : null;
+  const phoneBad = (v: string) => problemOfPhone(phoneRules, v);
+  const part3Why = shapes.map((sh) => guestsWhy(sh, groupOf(sh.day), childMaxAge, phoneBad)).find(Boolean) ?? null;
+  const part4Why =
+    shapes
+      .map((sh) => {
+        const c = compsOf(sh);
+        if (!sh.roomIds.every((id) => c.some((x) => x.roomId === id))) return `Seat the guests of ${roomsWord(sh.rows.map((r) => r.roomNumber))} in their table`;
+        return (faultsOf[sh.day] ?? [])[0] ?? null;
+      })
+      .find(Boolean) ?? null;
   useEffect(() => {
-    if (d.at > 1 && !part1Ready) set({ at: 1 });
+    if (d.at > PART.rooms && part1Why && p && !q.isFetching) set({ at: PART.when });
+    else if (d.at > PART.rooms && !picked.length && p && !q.isFetching) set({ at: PART.rooms });
+    else if (d.at > PART.add) set({ at: PART.add });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [part1Ready]);
+  }, [part1Why, picked.length, PART.add]);
 
   const addM = useMutation({
     mutationFn: () =>
       addRooms(session!, entry.id, {
-        roomIds: picked,
-        adults,
-        childAges: ages,
-        roomCompositions: picked.map((id) => comps.find((c) => c.roomId === id)!).filter(Boolean),
+        arrive,
+        hereNow: arrivesToday && d.hereNow === "YES",
+        stays: shapes.map((sh) => {
+          const g = groupOf(sh.day);
+          const c = compsOf(sh);
+          return {
+            checkOut: sh.day,
+            roomIds: sh.roomIds,
+            adults: Number(g.adults || 0),
+            childAges: agesOf(g.kids),
+            roomCompositions: sh.roomIds.map((id) => c.find((x) => x.roomId === id)!).filter(Boolean),
+            guest: sh.joins ? null : { title: g.title || null, name: g.name.trim(), phone: g.phone.trim() || null },
+          };
+        }),
         reason: d.reason.trim() || null,
       }),
     onSuccess: (o) => {
@@ -1202,24 +1498,26 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
       setDone(o);
       setD(EMPTY_ADD);
       try {
-        window.localStorage.removeItem(`desk:rcomp:add-room:${entry.id}`);
+        for (const sh of shapes) window.localStorage.removeItem(`desk:rcomp:add-room:${entry.id}:${sh.day}`);
       } catch {
         /* nothing kept */
       }
       refresh([["add-room-preview", entry.id], ["identity-proofs", entry.id], ["billing-summary", entry.id], ["held-documents", entry.id]]);
-      toast.success(`${roomsWord(o.roomNumbers)} added to the booking`);
-      if (o.outcome.walk.blocked) toast.warning(`It stopped at ${o.outcome.walk.blocked.atStep.toLowerCase().replace(/_/g, " ")}: ${o.outcome.walk.blocked.message}`);
+      const made = o.bookings.filter((b) => b.entryId);
+      if (o.joined) toast.success(`${roomsWord(o.joined.roomNumbers)} added to the booking`);
+      if (made.length) toast.success(`${made.length === 1 ? "A booking" : `${made.length} bookings`} of their own made on this enquiry`);
+      for (const b of o.bookings) if (b.failed) toast.warning(b.failed);
     },
     onError: (e) => toastRefusal(e, "Could not add the room"),
   });
   const startAgain = useMutation({
     mutationFn: async () => {
-      if (pendingSlots.length) await discardPendingGuests(session!, entry.id, pendingSlots.map((s) => s.key)).catch(() => null);
+      if (pendingSlots.length) await discardPendingGuests(session!, entry.id, pendingSlots.map((x) => x.key)).catch(() => null);
     },
     onSettled: () => {
       setD(EMPTY_ADD);
       try {
-        window.localStorage.removeItem(`desk:rcomp:add-room:${entry.id}`);
+        for (const sh of shapes) window.localStorage.removeItem(`desk:rcomp:add-room:${entry.id}:${sh.day}`);
       } catch {
         /* nothing kept */
       }
@@ -1227,29 +1525,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
     },
   });
 
-  if (done) {
-    const pr = done.outcome.pricing;
-    return (
-      <div className="leaving" data-add-room>
-        <div className={`notice ${done.outcome.walk.blocked ? "next" : "paid"}`} role="status" data-add-room-done>
-          <span>
-            <b>{roomsWord(done.roomNumbers)} added to the booking</b> · {done.party.adultCount} adult{done.party.adultCount === 1 ? "" : "s"}
-            {done.party.childCount ? `, ${done.party.childCount} child${done.party.childCount === 1 ? "" : "ren"}` : ""} now
-            {pr.newTotal != null ? ` · the stay ${money(pr.priorTotal)} → ${money(pr.newTotal)}` : ""}
-            <br />
-            <span className="sm">
-              The quotation was made again (the old one replaced); the voucher and the proforma were made again and wait for you under Papers. Tonight is charged for the new{" "}
-              {done.roomNumbers.length === 1 ? "room" : "rooms"}; hand over the keys from Guests and rooms › Keys.
-            </span>
-          </span>
-          <Button kind="secondary" onClick={() => setDone(null)}>
-            Add another room
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
+  if (done) return <AddedResult done={done} onAgain={() => setDone(null)} />;
   if (q.isLoading || !p) return <p className="sm">Asking the house…</p>;
   if (p.refusal) {
     return (
@@ -1260,16 +1536,88 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
       </StepCard>
     );
   }
-  const seatedAll = picked.length > 0 && picked.every((id) => comps.some((c) => c.roomId === id));
-  const actWhy = !rule.may ? `Adding a room is for ${rule.words}` : !seatedAll ? "Seat the new guests in the price table first (3 · The price)" : null;
+  const actWhy = !rule.may ? `Adding a room is for ${rule.words}` : part4Why ? `${part4Why} (4 · The price)` : null;
+  const allWord = roomsWord(shapes.flatMap((sh) => sh.rows.map((r) => r.roomNumber)));
+  const ownCount = shapes.filter((sh) => !sh.joins).length;
+  // Arrival opens a set number of days before they come; a booking for tomorrow is often there at once.
+  const arrivalOpen = !!p.arrivalOpens && !!today && p.arrivalOpens <= today;
+  const leaveDays: string[] = [];
+  if (arrive && leave) for (let t = Date.parse(`${arrive}T00:00:00Z`) + 86_400_000; t <= Date.parse(`${leave}T00:00:00Z`); t += 86_400_000) leaveDays.push(new Date(t).toISOString().slice(0, 10));
+  const whatItMakes = shapes.map((sh) =>
+    sh.joins
+      ? `${roomsWord(sh.rows.map((r) => r.roomNumber))} join this booking, to ${fmtDay(sh.day)}`
+      : `${roomsWord(sh.rows.map((r) => r.roomNumber))} — a booking of its own, ${fmtDay(arrive)} → ${fmtDay(sh.day)}`,
+  );
 
   return (
     <div className="leaving" data-add-room>
-      <StepCard title="Add a room" status={`From tonight to the check-out — the same nights as the other rooms`} right={d !== EMPTY_ADD ? <Button kind="quiet" compact onClick={() => startAgain.mutate()}>Start again</Button> : undefined}>
-        {/* 1 · the rooms */}
-        <div className={`ext-part ${stateOf(1) === "open" ? "open" : "folded"}`} id={idOf(1)}>
-          <PartHead n={1} title="The rooms" state={stateOf(1)} summary={roomsWord(pickedRows.map((r) => r.roomNumber))} onEdit={() => goTo(1)} />
-          {stateOf(1) === "open" ? (
+      <StepCard
+        title="Add a room"
+        status="For guests who join the group — today, tomorrow or later"
+        right={d !== EMPTY_ADD ? <Button kind="quiet" compact onClick={() => startAgain.mutate()}>Start again</Button> : undefined}
+      >
+        {/* 1 · when they come */}
+        <div className={`ext-part ${stateOf(PART.when) === "open" ? "open" : "folded"}`} id={idOf(PART.when)}>
+          <PartHead
+            n={PART.when}
+            title="When they come"
+            state={stateOf(PART.when)}
+            summary={`Arrive ${fmtDay(arrive)}${arrivesToday ? (d.hereNow === "YES" ? " · at the desk now" : " · later today") : ""} · leave ${fmtDay(leave)}`}
+            onEdit={() => goTo(PART.when)}
+          />
+          {stateOf(PART.when) === "open" ? (
+            <>
+              <div className="form3">
+                <div className="field">
+                  <label>They arrive on</label>
+                  <DateInput value={arrive} min={today} max={p.arriveLatest ?? undefined} onChange={(e) => set({ arrive: e.target.value, hereNow: null })} />
+                </div>
+                <div className="field">
+                  <label>They leave on</label>
+                  <DateInput value={leave} min={arrive || today} max={p.leaveLatest} onChange={(e) => set({ leave: e.target.value })} />
+                </div>
+              </div>
+              {arrivesToday ? (
+                <div className="field">
+                  <label>Are they at the desk now?</label>
+                  <Choice
+                    options={[
+                      ["YES", "Yes — take them to Check-in"],
+                      ["LATER", "Later today"],
+                    ] as const}
+                    value={d.hereNow}
+                    onChange={(v) => set({ hereNow: v })}
+                  />
+                </div>
+              ) : null}
+              {p.datesWrong ? (
+                <p className="sm stop-ink" role="alert" style={{ margin: 0 }}>
+                  {p.datesWrong}
+                </p>
+              ) : (
+                <p className="sm" style={{ margin: 0 }}>
+                  The group stays {p.checkIn ? fmtDay(p.checkIn) : "—"} → {p.checkOut ? fmtDay(p.checkOut) : "—"}.{" "}
+                  {p.joinsBooking && leave === p.checkOut
+                    ? "Rooms leaving with the group join this booking; a room leaving on another day is a booking of its own on this enquiry."
+                    : "The rooms make a booking of their own on this enquiry, in the friend's name — rooms leaving on different days, one booking each."}
+                </p>
+              )}
+              <PartDone ready={!part1Why} why={part1Why} onDone={() => goTo(PART.rooms)} />
+            </>
+          ) : null}
+        </div>
+
+        {/* 2 · the rooms */}
+        <div className={`ext-part ${stateOf(PART.rooms) === "open" ? "open" : stateOf(PART.rooms) === "done" ? "folded" : "waiting"}`} id={idOf(PART.rooms)}>
+          <PartHead
+            n={PART.rooms}
+            title="The rooms"
+            state={stateOf(PART.rooms)}
+            summary={whatItMakes.join(" · ")}
+            waitsFor="When they come"
+            onEdit={() => goTo(PART.rooms)}
+          />
+          {stateOf(PART.rooms) === "open" ? (
             <>
               <div className="ar-wrap">
                 <table className="table ar-table" data-no-pending>
@@ -1284,6 +1632,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                         </th>
                       ))}
                       <th className="num">A night</th>
+                      {leaveDays.length > 1 ? <th>Leaves</th> : null}
                       <th />
                     </tr>
                   </thead>
@@ -1291,23 +1640,11 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                     {p.rooms.map((r) => {
                       const on = picked.includes(r.roomId);
                       const movable = r.holders.find((h) => h.swappable && h.rooms.length > 0) ?? null;
+                      const toggle = () => set({ picked: on ? picked.filter((x) => x !== r.roomId) : [...picked, r.roomId] });
                       return (
-                        <tr
-                          key={r.roomId}
-                          className={`${on ? "on" : ""}${r.selectable ? "" : " shut"}`}
-                          onClick={r.selectable ? () => set({ picked: on ? picked.filter((x) => x !== r.roomId) : [...picked, r.roomId] }) : undefined}
-                          title={r.why ?? undefined}
-                          data-room={r.roomNumber}
-                        >
+                        <tr key={r.roomId} className={`${on ? "on" : ""}${r.selectable ? "" : " shut"}`} onClick={r.selectable ? toggle : undefined} title={r.why ?? undefined} data-room={r.roomNumber}>
                           <td className="lp-tick">
-                            <input
-                              type="checkbox"
-                              checked={on}
-                              disabled={!r.selectable}
-                              aria-label={`Room ${r.roomNumber}`}
-                              onClick={(e) => e.stopPropagation()}
-                              onChange={() => set({ picked: on ? picked.filter((x) => x !== r.roomId) : [...picked, r.roomId] })}
-                            />
+                            <input type="checkbox" checked={on} disabled={!r.selectable} aria-label={`Room ${r.roomNumber}`} onClick={(e) => e.stopPropagation()} onChange={toggle} />
                           </td>
                           <td>
                             <b>Room {r.roomNumber}</b>
@@ -1322,6 +1659,31 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                             </td>
                           ))}
                           <td className="num money">{r.roomRate != null ? money(r.roomRate) : "—"}</td>
+                          {leaveDays.length > 1 ? (
+                            <td onClick={(e) => e.stopPropagation()}>
+                              {on ? (
+                                <select
+                                  className="input ar-leave"
+                                  aria-label={`Room ${r.roomNumber} leaves on`}
+                                  value={shapes.find((sh) => sh.roomIds.includes(r.roomId))?.day ?? leave}
+                                  onChange={(e) => {
+                                    const v = e.target.value;
+                                    const next = { ...d.leaveOf };
+                                    if (v === leave) delete next[r.roomId];
+                                    else next[r.roomId] = v;
+                                    set({ leaveOf: next });
+                                  }}
+                                >
+                                  {leaveDays.filter((day) => !r.freeUntil || day <= r.freeUntil).map((day) => (
+                                    <option key={day} value={day}>
+                                      {fmtDay(day)}
+                                      {day === p.checkOut ? " · with the group" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : null}
+                            </td>
+                          ) : null}
                           <td>
                             {movable ? (
                               <Button
@@ -1346,169 +1708,159 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                   </tbody>
                 </table>
               </div>
-              <PartDone ready={part1Ready} why={part1Ready ? null : "Tick a free room"} onDone={() => goTo(2)} />
-            </>
-          ) : null}
-        </div>
-
-        {/* 2 · the new guests */}
-        <div className={`ext-part ${stateOf(2) === "open" ? "open" : stateOf(2) === "done" ? "folded" : "waiting"}`} id={idOf(2)}>
-          <PartHead
-            n={2}
-            title="The new guests"
-            state={stateOf(2)}
-            summary={`${adults} adult${adults === 1 ? "" : "s"}${d.kids.length ? `, ${d.kids.length} child${d.kids.length === 1 ? "" : "ren"} (${d.kids.join(", ")})` : ""}`}
-            waitsFor="The rooms"
-            onEdit={() => goTo(2)}
-          />
-          {stateOf(2) === "open" ? (
-            <>
-              <p className="sm" id={`ar-sleeps-${entry.id}`} style={{ margin: 0 }}>
-                {roomsWordPicked} sleep{pickedRows.length === 1 ? "s" : ""} up to {sleepsMax} guest{sleepsMax === 1 ? "" : "s"} aged 11 and over, and {kidsMax}{" "}
-                {kidsMax === 1 ? "child" : "children"} under 11 besides.
-              </p>
-              <div className="form3">
-                <div className="field">
-                  <label>Adults</label>
-                  <select className="input" value={d.adults} aria-describedby={`ar-sleeps-${entry.id}`} onChange={(e) => set({ adults: e.target.value })}>
-                    <option value="">Pick how many…</option>
-                    {Array.from({ length: sleepsMax + 1 }, (_, n) => n).map((n) => (
-                      <option key={n} value={String(n)} disabled={n > adultsRoom}>
-                        {n}
-                        {n > adultsRoom ? ` · ${olderKids ? `a child aged 11+ takes ${olderKids === 1 ? "a place" : "places"}` : "the room is full"}` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div className="field">
-                  <label>Children</label>
-                  <select className="input" value={String(d.kids.length)} onChange={(e) => set({ kids: Array.from({ length: Number(e.target.value) }, (_, i) => d.kids[i] ?? "") })}>
-                    {Array.from({ length: Math.min(8, sleepsMax + kidsMax) + 1 }, (_, n) => n).map((n) => (
-                      <option key={n} value={String(n)} disabled={n > kidsRoom}>
-                        {n}
-                        {n > kidsRoom ? " · no place left" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-              {d.kids.length ? (
-                <div className="form3">
-                  {d.kids.map((k, i) => {
-                    const mine = agesKnown[i];
-                    const olderOthers = adults + olderKids - (mine != null && mine > childMaxAge ? 1 : 0);
-                    const youngOthers = youngKids - (mine != null && mine <= childMaxAge ? 1 : 0);
-                    return (
-                      <div key={i} className="field">
-                        <label>Child {i + 1}&rsquo;s age</label>
-                        <select className="input" value={k} onChange={(e) => set({ kids: d.kids.map((x, j) => (j === i ? e.target.value : x)) })}>
-                          <option value="">Pick the age…</option>
-                          {Array.from({ length: 18 }, (_, a) => a).map((a) => {
-                            const older = a > childMaxAge;
-                            const shut = older ? olderOthers >= sleepsMax : youngOthers >= kidsMax;
-                            return (
-                              <option key={a} value={String(a)} disabled={shut}>
-                                {a}
-                                {older ? " · counts as an adult" : ""}
-                                {shut ? (older ? " — the room is full" : ` — ${kidsMax === 1 ? "one child" : `${kidsMax} children`} under 11 at most`) : ""}
-                              </option>
-                            );
-                          })}
-                        </select>
-                      </div>
-                    );
-                  })}
-                </div>
+              {shapes.length ? (
+                <ul className="sm ar-makes" aria-label="What this makes">
+                  {whatItMakes.map((w) => (
+                    <li key={w}>{w}</li>
+                  ))}
+                </ul>
               ) : null}
-              <p className="sm" style={{ margin: 0 }}>
-                The booking has {entry.adultCount ?? 0} adult{entry.adultCount === 1 ? "" : "s"}
-                {(entry.childAges ?? []).length ? ` and ${(entry.childAges ?? []).length} child${(entry.childAges ?? []).length === 1 ? "" : "ren"}` : ""} now; these join them.
-              </p>
-              <PartDone ready={!part2Why} why={part2Why} onDone={() => goTo(3)} />
+              <PartDone ready={!part2Why} why={part2Why} onDone={() => goTo(PART.who)} />
             </>
           ) : null}
         </div>
 
-        {/* 3 · the price */}
-        <div className={`ext-part ${stateOf(3) === "open" ? "open" : stateOf(3) === "done" ? "folded" : "waiting"}`} id={idOf(3)}>
-          <PartHead n={3} title="The price" state={stateOf(3)} summary="Seated and priced" waitsFor="The new guests" onEdit={() => goTo(3)} />
-          {stateOf(3) === "open" ? (
-            <>
-              {!rateMay ? <p className="sm" style={{ margin: 0 }}>In house the rates are the GM&rsquo;s — the rooms are priced at their own rates. Meals and extra beds are yours to set.</p> : null}
-              {/* The older table tool takes its look from .desk-root (2026-11-26: drawn bare, its columns ran together). */}
-              <Tool>
-                <RoomCompositionPlanner
-                  key={`${picked.join(",")}|${adults}|${d.kids.join(",")}`}
-                tableOnly
-                autoSeat={!comps.length}
-                initialCompositions={comps.length ? comps : undefined}
-                sealedRoomIds={picked}
-                entryCheckIn={p.checkIn}
-                entryCheckOut={p.checkOut}
-                entryAdults={adults}
-                entryChildAges={ages}
-                roomDates={roomDates}
-                entryId={entry.id}
-                lockCommercial={!rateMay}
-                persistKey={`add-room:${entry.id}`}
-                onChange={setComps}
-                onFaultsChange={setFaults}
-                />
-              </Tool>
-              <PartDone ready={!part3Why} why={part3Why} onDone={() => goTo(4)} />
-            </>
-          ) : null}
-        </div>
-
-        {/* 4 · their documents */}
-        <div className={`ext-part ${stateOf(4) === "open" ? "open" : stateOf(4) === "done" ? "folded" : "waiting"}`} id={idOf(4)}>
+        {/* 3 · who stays */}
+        <div className={`ext-part ${stateOf(PART.who) === "open" ? "open" : stateOf(PART.who) === "done" ? "folded" : "waiting"}`} id={idOf(PART.who)}>
           <PartHead
-            n={4}
-            title="Their documents"
-            state={stateOf(4)}
-            summary={d.docs === "NOW" ? "Recorded now" : "Later, from the Guests tab"}
-            waitsFor="The price"
-            onEdit={() => goTo(4)}
+            n={PART.who}
+            title="Who stays"
+            state={stateOf(PART.who)}
+            summary={shapes
+              .map((sh) => {
+                const g = groupOf(sh.day);
+                const who = sh.joins ? "" : `${g.name.trim()}: `;
+                return `${who}${Number(g.adults || 0)} adult${g.adults === "1" ? "" : "s"}${g.kids.length ? `, ${g.kids.length} child${g.kids.length === 1 ? "" : "ren"}` : ""}`;
+              })
+              .join(" · ")}
+            waitsFor="The rooms"
+            onEdit={() => goTo(PART.who)}
           />
-          {stateOf(4) === "open" ? (
+          {stateOf(PART.who) === "open" ? (
             <>
-              <Choice
-                options={[
-                  ["NOW", "Record them now"],
-                  ["LATER", "Later, from the Guests tab"],
-                ] as const}
-                value={d.docs}
-                onChange={(v) => set({ docs: v })}
-              />
-              {d.docs === "NOW" ? (
-                <Tool>
-                  <IdentityProofBlock entry={entry} pendingSlots={pendingSlots} pendingRoomOf={pendingRoomOf} title="The new guests' documents" />
-                </Tool>
-              ) : d.docs === "LATER" ? (
+              {shapes.map((sh) => (
+                <GroupGuests key={sh.day} shape={sh} g={groupOf(sh.day)} childMaxAge={childMaxAge} set={(patch) => setGroup(sh.day, patch)} entryId={entry.id} />
+              ))}
+              {hasJoin ? (
                 <p className="sm" style={{ margin: 0 }}>
-                  Once the rooms are added, the new guests&rsquo; rows are in the booking file&rsquo;s Guests tab › Edit — the same table, photo and phone code as at Check-in.
+                  The booking has {entry.adultCount ?? 0} adult{entry.adultCount === 1 ? "" : "s"}
+                  {(entry.childAges ?? []).length ? ` and ${(entry.childAges ?? []).length} child${(entry.childAges ?? []).length === 1 ? "" : "ren"}` : ""} now; the guests of the rooms
+                  that join it are added to them.
                 </p>
               ) : null}
-              <PartDone ready={!!d.docs} why={d.docs ? null : "Say when the documents are recorded"} onDone={() => goTo(5)} />
+              <PartDone ready={!part3Why} why={part3Why} onDone={() => goTo(PART.price)} />
             </>
           ) : null}
         </div>
 
-        {/* 5 · add them */}
-        <div className={`ext-part ${stateOf(5) === "open" ? "open" : "waiting"}`} id={idOf(5)}>
-          <PartHead n={5} title="Add the rooms" state={stateOf(5) === "done" ? "open" : stateOf(5)} waitsFor="Their documents" />
-          {stateOf(5) === "open" ? (
+        {/* 4 · the price */}
+        <div className={`ext-part ${stateOf(PART.price) === "open" ? "open" : stateOf(PART.price) === "done" ? "folded" : "waiting"}`} id={idOf(PART.price)}>
+          <PartHead n={PART.price} title="The price" state={stateOf(PART.price)} summary="Seated and priced" waitsFor="Who stays" onEdit={() => goTo(PART.price)} />
+          {stateOf(PART.price) === "open" ? (
             <>
+              {!rateMay ? <p className="sm" style={{ margin: 0 }}>In house the rates are the GM&rsquo;s — the rooms are priced at their own rates. Meals and extra beds are yours to set.</p> : null}
+              {ownCount ? <p className="sm" style={{ margin: 0 }}>A booking of its own is priced on the group&rsquo;s package; a percentage off the group&rsquo;s booking carries to it.</p> : null}
+              {shapes.map((sh) => {
+                const g = groupOf(sh.day);
+                const c = compsOf(sh);
+                return (
+                  <div key={sh.day} className="ar-group" data-group={sh.day}>
+                    <GroupHead shape={sh} />
+                    {/* The older table tool takes its look from .desk-root (2026-11-26: drawn bare, its columns ran together). */}
+                    <Tool>
+                      <RoomCompositionPlanner
+                        key={compsKeyOf(sh.roomIds, g, arrive, sh.day)}
+                        tableOnly
+                        autoSeat={!c.length}
+                        initialCompositions={c.length ? c : undefined}
+                        sealedRoomIds={sh.roomIds}
+                        entryCheckIn={arrive}
+                        entryCheckOut={sh.day}
+                        entryAdults={Number(g.adults || 0)}
+                        entryChildAges={agesOf(g.kids)}
+                        roomDates={sh.roomDates}
+                        entryId={entry.id}
+                        lockCommercial={!rateMay}
+                        persistKey={`add-room:${entry.id}:${sh.day}`}
+                        onChange={onComps[sh.day]}
+                        onFaultsChange={onFaults[sh.day]}
+                      />
+                    </Tool>
+                  </div>
+                );
+              })}
+              <PartDone ready={!part4Why} why={part4Why} onDone={() => goTo(hasJoin ? PART.docs : PART.add)} />
+            </>
+          ) : null}
+        </div>
+
+        {/* 5 · their documents — the rooms that join this booking only */}
+        {hasJoin ? (
+          <div className={`ext-part ${stateOf(PART.docs) === "open" ? "open" : stateOf(PART.docs) === "done" ? "folded" : "waiting"}`} id={idOf(PART.docs)}>
+            <PartHead
+              n={PART.docs}
+              title="Their documents"
+              state={stateOf(PART.docs)}
+              summary={d.docs === "NOW" ? "Recorded now" : "Later, from the Guests tab"}
+              waitsFor="The price"
+              onEdit={() => goTo(PART.docs)}
+            />
+            {stateOf(PART.docs) === "open" ? (
+              <>
+                <Choice
+                  options={[
+                    ["NOW", "Record them now"],
+                    ["LATER", "Later, from the Guests tab"],
+                  ] as const}
+                  value={d.docs}
+                  onChange={(v) => set({ docs: v })}
+                />
+                {d.docs === "NOW" ? (
+                  <Tool>
+                    <IdentityProofBlock entry={entry} pendingSlots={pendingSlots} pendingRoomOf={pendingRoomOf} title="The new guests' documents" />
+                  </Tool>
+                ) : d.docs === "LATER" ? (
+                  <p className="sm" style={{ margin: 0 }}>
+                    Once the rooms are added, the new guests&rsquo; rows are in the booking file&rsquo;s Guests tab › Edit — the same table, photo and phone code as at Check-in.
+                  </p>
+                ) : null}
+                {ownCount ? <p className="sm" style={{ margin: 0 }}>The guests of a booking of its own give their documents on that booking, at its Check-in.</p> : null}
+                <PartDone ready={!!d.docs} why={d.docs ? null : "Say when the documents are recorded"} onDone={() => goTo(PART.add)} />
+              </>
+            ) : null}
+          </div>
+        ) : null}
+
+        {/* last · add them */}
+        <div className={`ext-part ${stateOf(PART.add) === "open" ? "open" : "waiting"}`} id={idOf(PART.add)}>
+          <PartHead n={PART.add} title="Add the rooms" state={stateOf(PART.add) === "done" ? "open" : stateOf(PART.add)} waitsFor={hasJoin ? "Their documents" : "The price"} />
+          {stateOf(PART.add) === "open" ? (
+            <>
+              <ul className="sm ar-makes" aria-label="What this makes">
+                {whatItMakes.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+              {ownCount ? (
+                <p className="sm" style={{ margin: 0 }}>
+                  {arrivesToday && d.hereNow === "YES"
+                    ? "Each booking of its own is taken to Check-in, its rooms handed out — take their ID and registration card there and hand over the key."
+                    : arrivalOpen
+                      ? "Each booking of its own waits at Arrival with its rooms handed out — check them in when they come."
+                      : `Each booking of its own is reserved; it goes to Arrival on ${fmtDay(p.arrivalOpens)}.`}{" "}
+                  Its voucher and proforma are made and held for you; nothing is sent.
+                </p>
+              ) : null}
               <div className="field">
                 <label>
                   Note <span className="muted">· optional</span>
                 </label>
-                <input className="input" value={d.reason} onChange={(e) => set({ reason: e.target.value })} placeholder="e.g. two more of the party arrived" />
+                <input className="input" value={d.reason} onChange={(e) => set({ reason: e.target.value })} placeholder="e.g. two friends of the group arrived" />
               </div>
               <div className="ext-go">
                 {actWhy ? <span className="meta">{actWhy}</span> : null}
                 <Button className={actWhy ? undefined : "go"} state={actWhy ? "inert" : "default"} reason={actWhy ?? undefined} onClick={() => setConfirming(true)}>
-                  {`Add ${roomsWord(pickedRows.map((r) => r.roomNumber))}`}
+                  {`Add ${allWord}`}
                 </Button>
               </div>
             </>
@@ -1519,27 +1871,37 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
       <DsDialog
         open={confirming}
         onClose={() => setConfirming(false)}
-        title={`Add ${roomsWord(pickedRows.map((r) => r.roomNumber))}`}
+        title={`Add ${allWord}`}
         caseLines={[entry.id]}
         busy={addM.isPending}
         footer={
           <>
             <NotNow onClick={() => setConfirming(false)} busy={addM.isPending} />
             <Button className="go" state={addM.isPending ? "working" : "default"} workingLabel="Adding…" onClick={() => addM.mutate()}>
-              {`Add ${roomsWord(pickedRows.map((r) => r.roomNumber))}`}
+              {`Add ${allWord}`}
             </Button>
           </>
         }
       >
         <ul className="sm leaving-what">
-          <li>
-            {roomsWord(pickedRows.map((r) => r.roomNumber))} join the booking from tonight to the check-out ({p.checkOut ? fmtDay(p.checkOut) : "—"}), {nightsWord(p.nights.length)}, with {adults} adult
-            {adults === 1 ? "" : "s"}
-            {ages.length ? ` and ${ages.length} child${ages.length === 1 ? "" : "ren"}` : ""}.
-          </li>
-          <li>The quotation is made again and the old one replaced; the proforma and the voucher are made again and wait for you under Papers — nothing is sent.</li>
-          <li>Tonight is charged for the new rooms at once; housekeeping and the kitchen are told.</li>
-          <li>{d.docs === "NOW" ? "The documents recorded go with the new guests." : "The new guests' documents are recorded later from the Guests tab."}</li>
+          {shapes.map((sh) => {
+            const g = groupOf(sh.day);
+            const a = Number(g.adults || 0);
+            const guests = `${a} adult${a === 1 ? "" : "s"}${g.kids.length ? ` and ${g.kids.length} child${g.kids.length === 1 ? "" : "ren"}` : ""}`;
+            return sh.joins ? (
+              <li key={sh.day}>
+                {roomsWord(sh.rows.map((r) => r.roomNumber))} join this booking from tonight to the check-out ({fmtDay(sh.day)}), with {guests}. The quotation is made again and the
+                old one replaced; the proforma and the voucher are made again and held. Tonight is charged for them at once.
+              </li>
+            ) : (
+              <li key={sh.day}>
+                {roomsWord(sh.rows.map((r) => r.roomNumber))} — a booking of its own on this enquiry for {g.name.trim()}, {fmtDay(arrive)} → {fmtDay(sh.day)}, with {guests}. It takes the
+                group&rsquo;s package and who pays, and is{" "}
+                {arrivesToday && d.hereNow === "YES" ? "taken to Check-in" : arrivalOpen ? "taken to Arrival, its rooms handed out" : `reserved, and goes to Arrival on ${fmtDay(p.arrivalOpens)}`}.
+              </li>
+            );
+          })}
+          <li>Nothing is sent to anyone; the papers wait under each booking&rsquo;s Papers.</li>
         </ul>
       </DsDialog>
 

@@ -3215,3 +3215,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .guests-view .gv-count { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
 .ds .guests-view .gv-count .gv-acts { margin-left: auto; display: flex; align-items: center; gap: var(--s2); }
 .ds .guests-view .gv-count .gv-acts .gv-all { margin: 0; }
+
+/* Add a room for guests who join the group (2026-11-27): a block per booking to be made. */
+.ds .ar-group { display: grid; gap: var(--s2); padding: var(--s3); border: 1px solid var(--line); border-radius: var(--r-card, 6px); background: var(--surface); }
+.ds .ar-group + .ar-group { margin-top: var(--s2); }
+.ds .ar-group-h { display: flex; align-items: baseline; gap: var(--s2); flex-wrap: wrap; }
+.ds .ar-group-h .sm { color: var(--ink-2); }
+.ds .ar-kind { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 3px; border: 1px solid var(--line-2); color: var(--ink-2); background: var(--surface-2); }
+.ds .ar-kind.joins { border-color: var(--accent); color: var(--accent-ink, var(--accent)); background: var(--accent-soft); }
+.ds .ar-makes { margin: 0; padding-left: 1.2em; display: grid; gap: 2px; }
+.ds .ar-leave { min-width: 120px; height: 30px; padding: 0 6px; }
+.ds .ar-made { align-items: center; }

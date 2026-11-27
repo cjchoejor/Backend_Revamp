@@ -181,14 +181,29 @@ export type AddRoomRow = {
   why: string | null;
   needsCleaning: boolean;
   holders: AddRoomHolder[];
+  /** The last day new guests may leave it: the day its next guest comes, else the day asked (2026-11-27). */
+  freeUntil?: string;
   roomRate: number | null;
 };
 
 export type AddRoomPreview = {
+  /** The group's own stay. */
   checkIn: string | null;
   checkOut: string | null;
+  today: string;
+  /** The new guests' dates, as asked (else today and the group's check-out). */
+  arrive: string;
+  leave: string;
+  arriveLatest: string | null;
+  leaveLatest: string;
+  /** Rooms leaving on the group's check-out join the booking itself (its check-in day only). */
+  joinsBooking: boolean;
+  /** The day a booking of its own reaches Arrival; before that it waits at Reserve. */
+  arrivalOpens: string;
   nights: string[];
   refusal: string | null;
+  /** Dates that cannot be, said where they are typed. */
+  datesWrong: string | null;
   approvers: { may: boolean; words: string };
   party: { adults: number; childAges: number[] };
   rooms: AddRoomRow[];
@@ -196,11 +211,28 @@ export type AddRoomPreview = {
   gstRate: number | null;
 };
 
-export function previewAddRoom(session: Session, entryId: string) {
-  return apiRequest<AddRoomPreview>(`/api/entries/${entryId}/add-room/preview`, { session, method: "POST", body: {} });
+export function previewAddRoom(session: Session, entryId: string, dates: { arrive?: string | null; leave?: string | null } = {}) {
+  return apiRequest<AddRoomPreview>(`/api/entries/${entryId}/add-room/preview`, { session, method: "POST", body: { arrive: dates.arrive || null, leave: dates.leave || null } });
 }
 
-export type AddRoomsOutcome = {
+/** A booking of its own made for guests who joined the group (2026-11-27). */
+export type AddedBooking = {
+  entryId: string | null;
+  roomNumbers: string[];
+  checkIn: string;
+  checkOut: string;
+  guestName: string | null;
+  reachedStage: string | null;
+  /** At Check-in, ready for their ID, registration card and key. */
+  atCheckIn: boolean;
+  blocked: { atStep: string; message: string } | null;
+  notes: string[];
+  heldDocuments: Array<{ id: string; kind: string; documentId: string }>;
+  quotationTotal: number | null;
+  failed: string | null;
+};
+
+export type AddRoomsJoined = {
   roomNumbers: string[];
   party: { adultCount: number; childCount: number; childAges: number[]; guestCount: number };
   outcome: {
@@ -211,10 +243,26 @@ export type AddRoomsOutcome = {
   };
 };
 
+export type AddRoomsOutcome = {
+  /** The rooms that joined the booking (its check-in day, the group's dates). */
+  joined: AddRoomsJoined | null;
+  /** The bookings of their own, on the same enquiry. */
+  bookings: AddedBooking[];
+};
+
+export type AddRoomsStay = {
+  checkOut: string;
+  roomIds: string[];
+  adults: number;
+  childAges: number[];
+  roomCompositions: RoomCompositionInput[];
+  guest?: { title?: string | null; name: string; phone?: string | null } | null;
+};
+
 export function addRooms(
   session: Session,
   entryId: string,
-  body: { roomIds: string[]; adults: number; childAges: number[]; roomCompositions: RoomCompositionInput[]; reason?: string | null },
+  body: { arrive: string; hereNow: boolean; stays: AddRoomsStay[]; reason?: string | null },
 ) {
   return apiRequest<AddRoomsOutcome>(`/api/entries/${entryId}/add-room`, { session, method: "POST", body });
 }
