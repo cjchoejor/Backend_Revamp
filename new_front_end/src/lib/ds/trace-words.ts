@@ -77,6 +77,7 @@ const WORDS: Record<string, string> = {
   "ROOM_MOVE.REVERTED": "Room move undone — nothing changed",
   "ROOM_MOVE.FAILED": "Room move refused — nothing changed",
   "ROOM_MOVE.RESOLVED": "Room move closed",
+  "ROOM_MOVE.CLOSED_BOOKINGS_ENDED": "Room move closed — the booking had ended",
   "DOCUMENT.HELD": "Paper held for the desk to send or not",
   "COMMUNICATION.REPLY_NO_LONGER_AWAITED": "No answer needed any more — the paper was replaced",
   "COMMUNICATION.REPLY_NOT_ASKED": "No answer asked for — the reply to this paper is switched off",

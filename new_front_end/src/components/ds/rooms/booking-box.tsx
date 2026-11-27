@@ -222,9 +222,11 @@ export function BookingBox({
       if (swap) return { words: `${block.words} — they would take Room ${t.roomNumber}`, shut: false };
       return { words: block.words, shut: nightMove };
     }
+    // A room this booking keeps on those nights cannot take them, a whole room's included (2026-11-27,
+    // operator on the hotel's ENT-20261123-0013: 702 offered 206, the booking's own room that night).
+    const kept = keptOn(id, land);
+    if (kept.length) return { words: `this booking's room on ${daysWords(kept)}`, shut: true };
     if (nightMove) {
-      const kept = keptOn(id, land);
-      if (kept.length) return { words: `this booking's room on ${daysWords(kept)}`, shut: true };
       // A room of the booking on other nights takes these nights into its record — only with the same guests.
       if (days === 0 && id !== t.roomId && (held.get(id)?.size ?? 0) > 0) {
         const into = guestsIn.get(id);
