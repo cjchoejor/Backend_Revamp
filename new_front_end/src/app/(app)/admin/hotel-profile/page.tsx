@@ -3,7 +3,8 @@
 import { PhoneField } from "@/components/ds/phone-field";
 import { AdmField } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
-import { useEffect, useMemo, useState } from "react";
+import { SubTabs } from "@/components/ds/steps/kit";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api/client";
@@ -108,9 +109,15 @@ export default function AdminHotelProfilePage() {
         </div>
       )}
 
+      {/* One part of the profile a tab, one Save above for all of it (2026-11-27). */}
       {draft && (
-        <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
-          <h2 className="admin-display col-span-full text-lg">Core fields</h2>
+        <Suspense>
+          <SubTabs
+            label="Hotel profile"
+            param="tab"
+            tabs={[
+              { key: "hotel", label: "The hotel", content: (
+                <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
           <AdmField label="Hotel name">
             <input className="admin-input" value={draft.hotelName ?? ""} onChange={(e) => setDraft({ ...draft, hotelName: e.target.value })} />
           </AdmField>
@@ -130,7 +137,10 @@ export default function AdminHotelProfilePage() {
             <input className="admin-input" value={draft.propertyCurrency ?? ""} onChange={(e) => setDraft({ ...draft, propertyCurrency: e.target.value })} />
           </AdmField>
 
-          <h2 className="admin-display col-span-full mt-4 text-lg">Contact numbers</h2>
+                </div>
+              ) },
+              { key: "numbers", label: `Contact numbers · ${contacts.length}`, content: (
+                <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
           <div className="col-span-full space-y-2">
             {contacts.map((c, i) => (
               <div key={i} className="flex flex-wrap items-end gap-2">
@@ -150,7 +160,10 @@ export default function AdminHotelProfilePage() {
             </button>
           </div>
 
-          <h2 className="admin-display col-span-full mt-4 text-lg">Operating hours</h2>
+                </div>
+              ) },
+              { key: "hours", label: "Hours", content: (
+                <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
           <label className="space-y-1">
             <span className="admin-muted text-xs">Check-in from</span>
             <TimeInput className="admin-input" value={checkIn} onChange={(e) => setCheckIn(e.target.value)} />
@@ -160,7 +173,10 @@ export default function AdminHotelProfilePage() {
             <TimeInput className="admin-input" value={checkOut} onChange={(e) => setCheckOut(e.target.value)} />
           </label>
 
-          <h2 className="admin-display col-span-full mt-4 text-lg">Public holidays (optional)</h2>
+                </div>
+              ) },
+              { key: "holidays", label: "Public holidays", content: (
+                <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
           <div className="col-span-full">
             <Control
               f={{
@@ -179,17 +195,21 @@ export default function AdminHotelProfilePage() {
               onChange={(v) => setHolidays(Array.isArray(v) ? (v as unknown[]) : [])}
             />
           </div>
-        </div>
-      )}
 
-      {profileQuery.data?.id && (
-        <div className="mt-10 border-t border-border pt-6">
-          <VersionsTab
-            entityType="HotelProfile"
-            entityId={profileQuery.data.id}
-            invalidateOnRestore={[["admin", "hotel-profile"]]}
+                </div>
+              ) },
+              profileQuery.data?.id
+                ? {
+                    key: "versions",
+                    label: "Earlier versions",
+                    content: (
+                      <VersionsTab entityType="HotelProfile" entityId={profileQuery.data.id} invalidateOnRestore={[["admin", "hotel-profile"]]} />
+                    ),
+                  }
+                : null,
+            ]}
           />
-        </div>
+        </Suspense>
       )}
     </div>
   );

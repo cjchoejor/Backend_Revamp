@@ -2,6 +2,7 @@
 
 import { AdmField, FieldTitle } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -225,64 +226,17 @@ export default function AdminRoomsPage() {
         </h1>
       </div>
 
-      <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
-        <h2 className="admin-display col-span-full flex items-center gap-2 text-lg">
-          Add room
-          <Help label="Beds in a room">
-            Any room can be made up in any bed setup unless its room type, or the room itself here, narrows it. The usual bed is how the room is normally
-            made up: its room type's, unless you give this room its own, since two rooms of one type can differ. Bed now is how it is made up today: the
-            desk changes it when a guest asks for another setup, and it goes back to the usual bed when that guest leaves.
-          </Help>
-        </h2>
-        <AdmField label="Room number">
-          <input className="admin-input" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
-        </AdmField>
-        <AdmField label="Room type">
-          <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
-            <option value="">Select room type</option>
-            {(roomTypesQuery.data?.items ?? []).map((rt) => (
-              <option key={rt.id} value={rt.id}>
-                {rt.code} — {rt.name}
-              </option>
-            ))}
-          </select>
-        </AdmField>
-        <AdmField label="Floor">
-          <input className="admin-input" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
-        </AdmField>
-        <AdmField label="Usual bed">
-          <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
-            <option value="">
-              {(() => {
-                const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
-                return usual ? `As its room type (${bedSetupWord(usual)})` : "As its room type";
-              })()}
-            </option>
-            {bedTypes.map((b) => (
-              <option key={b} value={b}>
-                {bedLabel(b)}
-              </option>
-            ))}
-          </select>
-        </AdmField>
-        <div className="col-span-full">
-          <FieldTitle label="This room can be made up as" />
-          <AllowedBedSetups
-            vocabulary={bedTypes}
-            value={form.allowedBedTypes}
-            onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
-            emptyLabel="Follows its room type"
-          />
-        </div>
-        <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
-          Create room
-        </button>
-      </div>
-
+      {/* The rooms, adding one and the kinds of fault, a tab each (2026-11-27). */}
       <Suspense>
-        <SettingsList groups={[{ keys: ["deficientCondition.categories"] }]} />
-      </Suspense>
-
+        <SubTabs
+          label="Rooms"
+          param="tab"
+          tabs={[
+            {
+              key: "rooms",
+              label: `Rooms · ${allRooms.length}`,
+              content: (
+                <div className="space-y-4">
       {defForm && (
         <div className="admin-panel space-y-3 p-5">
           <h2 className="admin-display text-lg">Report a fault on Room {defForm.roomNumber}</h2>
@@ -337,6 +291,7 @@ export default function AdminRoomsPage() {
           </div>
         </div>
       )}
+
 
       <div className="admin-panel overflow-x-auto p-4">
         <div className="mb-3 flex flex-wrap items-center gap-3 border-b border-[var(--admin-rule)] pb-3 text-xs">
@@ -608,6 +563,84 @@ export default function AdminRoomsPage() {
         </table>
         <p className="admin-muted mt-3 text-xs">{rooms.length} room(s)</p>
       </div>
+                </div>
+              ),
+            },
+            {
+              key: "add",
+              label: "Add a room",
+              content: (
+                <div className="space-y-4">
+      <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
+        <h2 className="admin-display col-span-full flex items-center gap-2 text-lg">
+          Add room
+          <Help label="Beds in a room">
+            Any room can be made up in any bed setup unless its room type, or the room itself here, narrows it. The usual bed is how the room is normally
+            made up: its room type's, unless you give this room its own, since two rooms of one type can differ. Bed now is how it is made up today: the
+            desk changes it when a guest asks for another setup, and it goes back to the usual bed when that guest leaves.
+          </Help>
+        </h2>
+        <AdmField label="Room number">
+          <input className="admin-input" value={form.roomNumber} onChange={(e) => setForm({ ...form, roomNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Room type">
+          <select className="admin-select" value={form.roomTypeId} onChange={(e) => setForm({ ...form, roomTypeId: e.target.value })}>
+            <option value="">Select room type</option>
+            {(roomTypesQuery.data?.items ?? []).map((rt) => (
+              <option key={rt.id} value={rt.id}>
+                {rt.code} — {rt.name}
+              </option>
+            ))}
+          </select>
+        </AdmField>
+        <AdmField label="Floor">
+          <input className="admin-input" value={form.floorNumber} onChange={(e) => setForm({ ...form, floorNumber: e.target.value })} />
+        </AdmField>
+        <AdmField label="Usual bed">
+          <select className="admin-select" value={form.usualBedType} onChange={(e) => setForm({ ...form, usualBedType: e.target.value })}>
+            <option value="">
+              {(() => {
+                const usual = (roomTypesQuery.data?.items ?? []).find((rt) => rt.id === form.roomTypeId)?.defaultBedType;
+                return usual ? `As its room type (${bedSetupWord(usual)})` : "As its room type";
+              })()}
+            </option>
+            {bedTypes.map((b) => (
+              <option key={b} value={b}>
+                {bedLabel(b)}
+              </option>
+            ))}
+          </select>
+        </AdmField>
+        <div className="col-span-full">
+          <FieldTitle label="This room can be made up as" />
+          <AllowedBedSetups
+            vocabulary={bedTypes}
+            value={form.allowedBedTypes}
+            onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
+            emptyLabel="Follows its room type"
+          />
+        </div>
+        <button type="button" className="admin-btn col-span-full w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
+          Create room
+        </button>
+      </div>
+                </div>
+              ),
+            },
+            {
+              key: "faults",
+              label: "Kinds of fault",
+              content: (
+                <div className="space-y-4">
+      <Suspense>
+        <SettingsList groups={[{ keys: ["deficientCondition.categories"] }]} />
+      </Suspense>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

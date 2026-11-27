@@ -1415,6 +1415,8 @@ export type ApartmentPackageView = {
   weekly: ApartmentRateFigures;
   monthly: ApartmentRateFigures;
   units: ApartmentUnitView[];
+  /** What each of its apartments usually has, with counts, never priced (2026-11-27). */
+  amenityKit: Array<{ name: string; count: number }>;
   updatedAt: string;
   updatedBy: string | null;
 };
@@ -1437,7 +1439,26 @@ export type ApartmentPackageInput = {
   monthlyRate: string;
   sortOrder: number | null;
   units: Array<{ label: string; maxOccupants: number; roomIds: string[] }>;
+  amenityKit?: Array<{ name: string; count: number }>;
 };
+
+/** The hotel's list of items an apartment may hold, and the apartments' extra bed rate (2026-11-27). */
+export type ApartmentExtras = {
+  serviceChargeRate: number;
+  gstRate: number;
+  amenityItems: string[];
+  amenityItemsSaved: boolean;
+  extraBed: (ApartmentRateFigures & { typedWithTax: boolean }) | null;
+};
+export async function getApartmentExtras(session: Session) {
+  return apiRequest<ApartmentExtras>("/api/admin/apartment-extras", { session });
+}
+export async function setApartmentAmenityItems(session: Session, items: string[]) {
+  return apiRequest<ApartmentExtras>("/api/admin/apartment-extras/amenity-items", { method: "PUT", session, body: { items } });
+}
+export async function setApartmentExtraBedRate(session: Session, body: { rate: string | null; withTaxes: boolean }) {
+  return apiRequest<ApartmentExtras>("/api/admin/apartment-extras/extra-bed-rate", { method: "PUT", session, body });
+}
 
 export async function listApartmentPackagesAdmin(session: Session) {
   return apiRequest<{ serviceChargeRate: number; gstRate: number; packages: ApartmentPackageView[]; rooms: ApartmentRoomOption[] }>(

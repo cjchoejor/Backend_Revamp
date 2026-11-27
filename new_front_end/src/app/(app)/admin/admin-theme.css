@@ -636,4 +636,38 @@
 .ds .admin-console .apt-room button { width: 20px; height: 20px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-3); font-size: 15px; line-height: 1; cursor: pointer; }
 .ds .admin-console .apt-room button:hover { background: var(--danger-soft); color: var(--danger); }
 .ds .admin-console .apt-add-room { width: auto; min-width: 200px; max-width: 320px; }
+/* Apartments in tabs (2026-11-27): a package's parts, its usual list, the hotel's list of items. */
+.ds .admin-console .apt-part { display: flex; flex-direction: column; gap: var(--s4); }
+.ds .admin-console .apt-facts { display: grid; grid-template-columns: max-content 1fr; gap: var(--s2) var(--s5); font-size: var(--t-sm); margin: 0; }
+.ds .admin-console .apt-facts dt { color: var(--ink-3); font-weight: 500; }
+.ds .admin-console .apt-facts dd { margin: 0; font-weight: 600; }
+.ds .admin-console .apt-features { margin: var(--s2) 0 0; padding-left: var(--s5); list-style: disc; font-size: var(--t-sm); color: var(--ink-2); }
+.ds .admin-console table.apt-kit { max-width: 520px; }
+.ds .admin-console table.apt-kit .num { text-align: right; width: 1%; white-space: nowrap; }
+.ds .admin-console .apt-kit-edit { display: flex; flex-direction: column; gap: var(--s3); }
+.ds .admin-console .apt-kit-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--s3); }
+.ds .admin-console .apt-kit-add .admin-select { min-width: 220px; }
+.ds .admin-console .apt-items { display: flex; flex-wrap: wrap; gap: var(--s2); margin: 0; padding: 0; list-style: none; }
+.ds .admin-console .apt-items li { display: inline-flex; align-items: center; gap: var(--s1); padding: 3px 4px 3px 10px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; font-size: var(--t-sm); }
+.ds .admin-console .apt-items button { width: 20px; height: 20px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-3); font-size: 15px; line-height: 1; cursor: pointer; }
+.ds .admin-console .apt-items button:hover { background: var(--danger-soft); color: var(--danger); }
+.ds .admin-console .subtabs + .subtab-panel, .ds .admin-console .subtab-panel { padding-top: var(--s3); }
 .ds .admin-console .apt-save { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--s3); padding-top: var(--s3); border-top: 1px solid var(--line); }
+
+/* ---- a page of settings in tabs (2026-11-27): one tab per group, its count beside its name ---- */
+.ds .admin-console .set-tabs .subtabs { flex-wrap: wrap; }
+.ds .admin-console .set-tab-n {
+  display: inline-block;
+  min-width: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--line);
+  color: var(--ink-2);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.ds .admin-console .subtab[aria-selected="true"] .set-tab-n { background: var(--tone, var(--accent)); color: #fff; }
+.ds .admin-console .set-group-about { display: flex; align-items: center; gap: var(--s2); margin: 0 0 var(--s1); color: var(--ink-2); font-size: var(--t-sm); }

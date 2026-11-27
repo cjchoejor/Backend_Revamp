@@ -1,7 +1,7 @@
 "use client";
 
 import { TitleSelect } from "@/components/ds/person-name";
-import { useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -19,6 +19,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm, usePrompt } from "@/components/providers/dialog-provider";
 import { Help } from "@/components/ds/help";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { DurationInput, durationInWords } from "@/components/admin/duration-input";
 
 type ActorLevel = "L1" | "L2" | "L3" | "L4";
@@ -153,6 +154,129 @@ export default function AdminStaffPage() {
         </h1>
       </div>
 
+      {/* The people, and adding one, a tab each (2026-11-27). */}
+      <Suspense>
+        <SubTabs
+          label="Staff"
+          param="tab"
+          tabs={[
+            {
+              key: "people",
+              label: `Staff · ${items.length}`,
+              content: (
+                <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <label className="flex items-center gap-2 text-sm text-[var(--admin-ink-soft)]">
+          <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+          Show inactive
+        </label>
+      </div>
+
+      <div className="admin-panel overflow-x-auto p-4">
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Username</th>
+              <th>Level</th>
+              <th>Role</th>
+              <th>Session</th>
+              <th>Status</th>
+              <th />
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row: StaffUserAdmin) => (
+              <StaffRow
+                key={row.id}
+                row={row}
+                editing={editing?.id === row.id ? editing : null}
+                editingRolesForLevel={editingRolesForLevel}
+                allRoles={roles}
+                onStartEdit={() =>
+                  setEditing({
+                    id: row.id,
+                    title: row.title ?? "",
+                    fullName: row.fullName,
+                    username: row.username,
+                    roleId: row.roleId ?? row.roleRef?.id ?? "",
+                    actorLevel: (row.actorLevel as ActorLevel) ?? "L1",
+                  })
+                }
+                onCancelEdit={() => setEditing(null)}
+                onEditingChange={(next) => setEditing((prev) => (prev ? { ...prev, ...next } : prev))}
+                onSaveEdit={() => {
+                  if (!editing) return;
+                  if (!USERNAME_REGEX.test(editing.username)) {
+                    toast.error("Username: 3–32 chars, letters/digits/./_/- only.");
+                    return;
+                  }
+                  updateMutation.mutate({
+                    id: editing.id,
+                    body: {
+                      title: editing.title || null,
+                      fullName: editing.fullName,
+                      username: editing.username.trim().toLowerCase(),
+                      actorLevel: editing.actorLevel,
+                      roleId: editing.roleId || null,
+                      role: roles.find((r) => r.id === editing.roleId)?.roleCode,
+                    },
+                  });
+                  setEditing(null);
+                }}
+                onResetPin={async () => {
+                  const pin = await prompt({
+                    title: `Reset PIN for ${row.fullName}`,
+                    message: "Enter the new 4-digit PIN. The user will use this to sign in next time.",
+                    inputType: "password",
+                    placeholder: "New PIN (4 digits)",
+                    confirmLabel: "Reset PIN",
+                    minLength: 4,
+                  });
+                  if (!pin) return;
+                  if (!PIN_REGEX.test(pin)) {
+                    toast.error("PIN must be exactly 4 digits.");
+                    return;
+                  }
+                  resetPinMutation.mutate({ id: row.id, pin });
+                }}
+                onDeactivate={async () => {
+                  const ok = await confirm({
+                    title: "Deactivate staff member",
+                    message: `Deactivate ${row.fullName}? Any active sessions will be terminated immediately and they won't be able to sign in until reactivated.`,
+                    confirmLabel: "Deactivate",
+                    variant: "danger",
+                  });
+                  if (ok) deactivateMutation.mutate(row.id);
+                }}
+                onPurge={async () => {
+                  const ok = await confirm({
+                    title: "Permanently delete staff member",
+                    message: `PERMANENTLY delete ${row.fullName} (${row.username})? This cannot be undone. Their audit history remains but the account is gone.`,
+                    confirmLabel: "Delete forever",
+                    variant: "danger",
+                  });
+                  if (ok) purgeMutation.mutate(row.id);
+                }}
+              />
+            ))}
+            {items.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-6 text-center text-sm opacity-60">
+                  No staff members match the current filter.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+                </div>
+              ),
+            },
+            {
+              key: "add",
+              label: "Add a person",
+              content: (
       <div className="admin-panel grid gap-4 p-5 md:grid-cols-2">
         <h2 className="admin-display col-span-full text-lg">Create staff</h2>
 
@@ -271,112 +395,11 @@ export default function AdminStaffPage() {
           {createMutation.isPending ? "Creating…" : "Create staff"}
         </button>
       </div>
-
-      <div className="flex items-center gap-3">
-        <label className="flex items-center gap-2 text-sm text-[var(--admin-ink-soft)]">
-          <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
-          Show inactive
-        </label>
-      </div>
-
-      <div className="admin-panel overflow-x-auto p-4">
-        <table className="admin-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Username</th>
-              <th>Level</th>
-              <th>Role</th>
-              <th>Session</th>
-              <th>Status</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((row: StaffUserAdmin) => (
-              <StaffRow
-                key={row.id}
-                row={row}
-                editing={editing?.id === row.id ? editing : null}
-                editingRolesForLevel={editingRolesForLevel}
-                allRoles={roles}
-                onStartEdit={() =>
-                  setEditing({
-                    id: row.id,
-                    title: row.title ?? "",
-                    fullName: row.fullName,
-                    username: row.username,
-                    roleId: row.roleId ?? row.roleRef?.id ?? "",
-                    actorLevel: (row.actorLevel as ActorLevel) ?? "L1",
-                  })
-                }
-                onCancelEdit={() => setEditing(null)}
-                onEditingChange={(next) => setEditing((prev) => (prev ? { ...prev, ...next } : prev))}
-                onSaveEdit={() => {
-                  if (!editing) return;
-                  if (!USERNAME_REGEX.test(editing.username)) {
-                    toast.error("Username: 3–32 chars, letters/digits/./_/- only.");
-                    return;
-                  }
-                  updateMutation.mutate({
-                    id: editing.id,
-                    body: {
-                      title: editing.title || null,
-                      fullName: editing.fullName,
-                      username: editing.username.trim().toLowerCase(),
-                      actorLevel: editing.actorLevel,
-                      roleId: editing.roleId || null,
-                      role: roles.find((r) => r.id === editing.roleId)?.roleCode,
-                    },
-                  });
-                  setEditing(null);
-                }}
-                onResetPin={async () => {
-                  const pin = await prompt({
-                    title: `Reset PIN for ${row.fullName}`,
-                    message: "Enter the new 4-digit PIN. The user will use this to sign in next time.",
-                    inputType: "password",
-                    placeholder: "New PIN (4 digits)",
-                    confirmLabel: "Reset PIN",
-                    minLength: 4,
-                  });
-                  if (!pin) return;
-                  if (!PIN_REGEX.test(pin)) {
-                    toast.error("PIN must be exactly 4 digits.");
-                    return;
-                  }
-                  resetPinMutation.mutate({ id: row.id, pin });
-                }}
-                onDeactivate={async () => {
-                  const ok = await confirm({
-                    title: "Deactivate staff member",
-                    message: `Deactivate ${row.fullName}? Any active sessions will be terminated immediately and they won't be able to sign in until reactivated.`,
-                    confirmLabel: "Deactivate",
-                    variant: "danger",
-                  });
-                  if (ok) deactivateMutation.mutate(row.id);
-                }}
-                onPurge={async () => {
-                  const ok = await confirm({
-                    title: "Permanently delete staff member",
-                    message: `PERMANENTLY delete ${row.fullName} (${row.username})? This cannot be undone. Their audit history remains but the account is gone.`,
-                    confirmLabel: "Delete forever",
-                    variant: "danger",
-                  });
-                  if (ok) purgeMutation.mutate(row.id);
-                }}
-              />
-            ))}
-            {items.length === 0 && (
-              <tr>
-                <td colSpan={7} className="py-6 text-center text-sm opacity-60">
-                  No staff members match the current filter.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+              ),
+            },
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

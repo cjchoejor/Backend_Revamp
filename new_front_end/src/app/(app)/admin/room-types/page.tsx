@@ -2,7 +2,8 @@
 
 import { AdmField as Field } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
-import { useState } from "react";
+import { SubTabs } from "@/components/ds/steps/kit";
+import { Suspense, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { createRoomType, deleteRoomType, listRoomTypes, updateRoomType, type RoomTypeAdmin } from "@/lib/api/admin";
@@ -118,55 +119,17 @@ export default function AdminRoomTypesPage() {
         </h1>
       </div>
 
-      <div className="admin-panel space-y-4 p-5">
-        <h2 className="admin-display text-lg">New room type</h2>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="Code" hint="Short code, e.g. DLX">
-            <input className="admin-input" placeholder="DLX" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
-          </Field>
-          <Field label="Name" hint="Display name">
-            <input className="admin-input" placeholder="Deluxe Room" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-          </Field>
-        </div>
-        <div className="grid gap-3 md:grid-cols-5">
-          <Field label="Standard capacity" hint="Everyday config, no extra bed (typically 2)">
-            <input className="admin-input" type="number" min={1} value={form.standardCapacity} onChange={(e) => setForm({ ...form, standardCapacity: e.target.value })} />
-          </Field>
-          <Field label="Max capacity" hint="Ceiling with extra bed (typically 3)">
-            <input className="admin-input" type="number" min={1} value={form.maxCapacity} onChange={(e) => setForm({ ...form, maxCapacity: e.target.value })} />
-          </Field>
-          <Field label="Max children" hint="Cap on kids under 11">
-            <input className="admin-input" type="number" min={0} value={form.maxChildren} onChange={(e) => setForm({ ...form, maxChildren: e.target.value })} />
-          </Field>
-          <Field label="Required adults" hint="When kids present">
-            <input className="admin-input" type="number" min={0} value={form.requiredAccompanyingAdults} onChange={(e) => setForm({ ...form, requiredAccompanyingAdults: e.target.value })} />
-          </Field>
-          <Field label="Max extra beds" hint="0 = none">
-            <input className="admin-input" type="number" min={0} value={form.maxExtraBeds} onChange={(e) => setForm({ ...form, maxExtraBeds: e.target.value })} />
-          </Field>
-        </div>
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="Usual bed setup" hint="How rooms of this type are normally made up">
-            <UsualBedSetup
-              vocabulary={bedTypes}
-              allowed={form.allowedBedTypes}
-              value={form.defaultBedType}
-              onChange={(v) => setForm({ ...form, defaultBedType: v })}
-            />
-          </Field>
-          <Field group label="Can be made up as" hint="Every box ticked = any setup">
-            <AllowedBedSetups
-              vocabulary={bedTypes}
-              value={form.allowedBedTypes}
-              onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
-            />
-          </Field>
-        </div>
-        <button type="button" className="admin-btn w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
-          Create room type
-        </button>
-      </div>
-
+      {/* The room types, and adding one, a tab each (2026-11-27). */}
+      <Suspense>
+        <SubTabs
+          label="Room types"
+          param="tab"
+          tabs={[
+            {
+              key: "types",
+              label: `Room types · ${items.length}`,
+              content: (
+                <div className="space-y-4">
       <div className="admin-panel overflow-x-auto p-4">
         <table className="admin-table">
           <thead>
@@ -276,6 +239,68 @@ export default function AdminRoomTypesPage() {
           </tbody>
         </table>
       </div>
+                </div>
+              ),
+            },
+            {
+              key: "add",
+              label: "Add a room type",
+              content: (
+                <div className="space-y-4">
+      <div className="admin-panel space-y-4 p-5">
+        <h2 className="admin-display text-lg">New room type</h2>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Code" hint="Short code, e.g. DLX">
+            <input className="admin-input" placeholder="DLX" value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} />
+          </Field>
+          <Field label="Name" hint="Display name">
+            <input className="admin-input" placeholder="Deluxe Room" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </Field>
+        </div>
+        <div className="grid gap-3 md:grid-cols-5">
+          <Field label="Standard capacity" hint="Everyday config, no extra bed (typically 2)">
+            <input className="admin-input" type="number" min={1} value={form.standardCapacity} onChange={(e) => setForm({ ...form, standardCapacity: e.target.value })} />
+          </Field>
+          <Field label="Max capacity" hint="Ceiling with extra bed (typically 3)">
+            <input className="admin-input" type="number" min={1} value={form.maxCapacity} onChange={(e) => setForm({ ...form, maxCapacity: e.target.value })} />
+          </Field>
+          <Field label="Max children" hint="Cap on kids under 11">
+            <input className="admin-input" type="number" min={0} value={form.maxChildren} onChange={(e) => setForm({ ...form, maxChildren: e.target.value })} />
+          </Field>
+          <Field label="Required adults" hint="When kids present">
+            <input className="admin-input" type="number" min={0} value={form.requiredAccompanyingAdults} onChange={(e) => setForm({ ...form, requiredAccompanyingAdults: e.target.value })} />
+          </Field>
+          <Field label="Max extra beds" hint="0 = none">
+            <input className="admin-input" type="number" min={0} value={form.maxExtraBeds} onChange={(e) => setForm({ ...form, maxExtraBeds: e.target.value })} />
+          </Field>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="Usual bed setup" hint="How rooms of this type are normally made up">
+            <UsualBedSetup
+              vocabulary={bedTypes}
+              allowed={form.allowedBedTypes}
+              value={form.defaultBedType}
+              onChange={(v) => setForm({ ...form, defaultBedType: v })}
+            />
+          </Field>
+          <Field group label="Can be made up as" hint="Every box ticked = any setup">
+            <AllowedBedSetups
+              vocabulary={bedTypes}
+              value={form.allowedBedTypes}
+              onChange={(v) => setForm({ ...form, allowedBedTypes: v })}
+            />
+          </Field>
+        </div>
+        <button type="button" className="admin-btn w-fit" disabled={createMutation.isPending} onClick={() => createMutation.mutate()}>
+          Create room type
+        </button>
+      </div>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

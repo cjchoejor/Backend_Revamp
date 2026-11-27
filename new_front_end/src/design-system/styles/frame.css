@@ -3250,3 +3250,29 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ar-holder-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s3); margin: 0; font-size: 13px; }
 .ds .ar-holder-facts dt { color: var(--ink-2); }
 .ds .ar-holder-facts dd { margin: 0; }
+
+/* What an apartment holds (2026-11-27): one block per apartment, a list with counts, an add row. */
+.ds .apt-amen { display: grid; gap: 6px; padding: 8px 0; }
+.ds .apt-amen + .apt-amen { border-top: 1px solid var(--line); }
+.ds .apt-amen-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.ds .apt-amen-head b { font-size: 14px; }
+.ds .apt-amen-head .ln, .ds .apt-amen-add .ln { flex: 1; }
+.ds .apt-amen-t { max-width: 520px; }
+.ds .apt-amen-t td, .ds .apt-amen-t th { padding: 4px 8px; }
+.ds .apt-amen-t .num { text-align: right; width: 1%; white-space: nowrap; }
+.ds .apt-amen .stepper { display: inline-flex; align-items: stretch; height: 30px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; overflow: hidden; }
+.ds .apt-amen .stepper button { width: 28px; padding: 0; border: 0; background: var(--surface-2); color: var(--ink); font-size: 16px; font-weight: 700; cursor: pointer; }
+.ds .apt-amen .stepper button:disabled { color: var(--ink-4); cursor: default; }
+.ds .apt-amen .stepper .input { width: 40px; height: 100%; border: 0; border-left: 1px solid var(--line-2); border-right: 1px solid var(--line-2); border-radius: 0; text-align: center; padding: 0; }
+.ds .apt-amen .x-btn { width: 26px; height: 26px; border: 1px solid var(--line-2); border-radius: 4px; background: #fff; color: var(--danger); font-size: 16px; font-weight: 700; line-height: 1; cursor: pointer; }
+.ds .apt-amen .x-btn:hover { background: var(--surface-2); }
+.ds .apt-amen-add { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.ds .apt-amen-add .field { margin: 0; }
+.ds .apt-amen-add .field select.input { min-width: 200px; }
+.ds .apt-amen-add .field.narrow .input { width: 64px; }
+
+/* An extra bed during an apartment stay (2026-11-27). */
+.ds .apt-bed-form { display: grid; gap: 10px; }
+.ds .apt-bed-form .form3 { align-items: end; }
+.ds .apt-bed-fig { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: baseline; padding: 8px 10px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--surface-2); }
+.ds .apt-bed-fig b { font-size: 16px; }

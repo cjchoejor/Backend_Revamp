@@ -123,3 +123,71 @@ export async function pickApartments(session: Session, entryId: string, unitIds:
 }
 
 export const PLAN_WORD: Record<ApartmentPlan, string> = { MONTHLY: "Monthly", WEEKLY: "Weekly" };
+
+/* ---- what an apartment holds, and an extra bed during the stay (2026-11-27) ---- */
+
+export type AmenityItem = { name: string; count: number };
+export type EntryApartmentAmenities = {
+  entryId: string;
+  /** The hotel's list of items to pick from, and any a package's usual list adds. */
+  known: string[];
+  editable: boolean;
+  units: Array<{ unitId: string; label: string; packageName: string; roomNumbers: string[]; items: AmenityItem[]; source: "BOOKING" | "PACKAGE" | "NONE" }>;
+};
+
+export async function getEntryApartmentAmenities(session: Session, entryId: string) {
+  return apiRequest<EntryApartmentAmenities>(`/api/entries/${encodeURIComponent(entryId)}/apartment-amenities`, { session });
+}
+export async function setEntryApartmentAmenities(session: Session, entryId: string, units: Array<{ unitId: string; items: AmenityItem[] }>) {
+  return apiRequest<EntryApartmentAmenities>(`/api/entries/${encodeURIComponent(entryId)}/apartment-amenities`, { method: "PUT", session, body: { units } });
+}
+
+export type BedFigures = { net: string; serviceCharge: string; gst: string; total: string };
+export type ApartmentExtraBedRow = {
+  id: string;
+  unitId: string;
+  unitLabel: string;
+  beds: number;
+  fromDate: string;
+  toDate: string;
+  nights: number;
+  ratePerBed: string;
+  night: BedFigures;
+  all: BedFigures;
+  nightsPosted: number;
+  note: string | null;
+  endedAt: string | null;
+  endReason: string | null;
+  createdAt: string;
+  createdBy: string;
+};
+export type ApartmentExtraBeds = {
+  entryId: string;
+  rate: { rate: string | null; total: string | null; serviceCharge: string | null; gst: string | null };
+  units: Array<{ unitId: string; label: string; packageName: string }>;
+  stay: { today: string; lastMorning: string | null };
+  mayAdd: boolean;
+  why: string | null;
+  beds: ApartmentExtraBedRow[];
+};
+export type BedAsk = { unitId: string; beds: number; fromDate: string; toDate: string };
+
+export async function getApartmentExtraBeds(session: Session, entryId: string) {
+  return apiRequest<ApartmentExtraBeds>(`/api/entries/${encodeURIComponent(entryId)}/apartment-extra-beds`, { session });
+}
+export async function previewApartmentExtraBed(session: Session, entryId: string, body: BedAsk) {
+  return apiRequest<{ nights: number; ratePerBed: string; night: BedFigures; all: BedFigures; unitLabel: string }>(
+    `/api/entries/${encodeURIComponent(entryId)}/apartment-extra-beds/preview`,
+    { method: "POST", session, body },
+  );
+}
+export async function addApartmentExtraBed(session: Session, entryId: string, body: BedAsk & { note?: string | null }) {
+  return apiRequest<ApartmentExtraBeds & { recordId: string }>(`/api/entries/${encodeURIComponent(entryId)}/apartment-extra-beds`, { method: "POST", session, body });
+}
+export async function endApartmentExtraBed(session: Session, entryId: string, recordId: string, body: { toDate: string; reason?: string | null }) {
+  return apiRequest<ApartmentExtraBeds>(`/api/entries/${encodeURIComponent(entryId)}/apartment-extra-beds/${encodeURIComponent(recordId)}/end`, {
+    method: "POST",
+    session,
+    body,
+  });
+}

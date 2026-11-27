@@ -52,6 +52,7 @@ import { useInvoiceRecipient } from "@/hooks/use-invoice-recipient";
 import { billNo, proformaBaseNo, quoteNo } from "@/lib/ds/papers";
 import { TripQuotationCard, useTripQuotation } from "./s2-trip-quotation";
 import { DuplicateQuestions } from "./duplicate-question";
+import { ApartmentAmenitiesCard } from "./apartment-amenities";
 
 /* ------------------------------------------------------------------ vocabulary */
 
@@ -703,6 +704,9 @@ export function S2Negotiation({
           : null}
         {!changing ? groupStays.map((e) => <DecidedConfigurationChanges key={e.id} entry={e} />) : null}
       </StepCard>
+
+      {/* An apartment booking: what the apartment holds, with counts, not priced (2026-11-27). */}
+      {!together.active ? <ApartmentAmenitiesCard entry={entry} /> : null}
 
       {/* The live quotation sits directly under the table that priced it (2026-09-30, operator).
           It used to be below the quote and the marker, pages away from the grid whose Save mints

@@ -2,7 +2,8 @@
 
 import { AdmField } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
-import { useEffect, useMemo, useState } from "react";
+import { SubTabs } from "@/components/ds/steps/kit";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import {
@@ -182,6 +183,17 @@ export default function AdminHouseTariffPage() {
         </div>
       )}
 
+      {/* The prices, the tariff in force and the earlier ones a tab each (2026-11-27). */}
+      <Suspense>
+        <SubTabs
+          label="House tariff"
+          param="tab"
+          tabs={[
+            {
+              key: "prices",
+              label: "Prices",
+              content: (
+                <div className="space-y-8">
       <section className="space-y-3">
         <h2 className="admin-display flex items-center gap-2 text-lg">
           Extra bed &amp; à-la-carte meals
@@ -262,8 +274,15 @@ export default function AdminHouseTariffPage() {
         </div>
       </section>
 
-      {active && (
-        <section className="space-y-3">
+                </div>
+              ),
+            },
+            active
+              ? {
+                  key: "active",
+                  label: "In force",
+                  content: (
+<section className="space-y-3">
           <h2 className="admin-display text-lg">Currently active</h2>
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
@@ -287,10 +306,15 @@ export default function AdminHouseTariffPage() {
             {active.notes && <p className="admin-muted mt-3 text-xs">{active.notes}</p>}
           </div>
         </section>
-      )}
-
-      {history.length > 0 && (
-        <section className="space-y-3">
+                  ),
+                }
+              : null,
+            history.length > 0
+              ? {
+                  key: "earlier",
+                  label: `Earlier versions · ${history.length}`,
+                  content: (
+<section className="space-y-3">
           <h2 className="admin-display text-lg">Previous versions</h2>
           <div className="admin-panel overflow-x-auto p-4">
             <table className="admin-table">
@@ -316,7 +340,12 @@ export default function AdminHouseTariffPage() {
             </table>
           </div>
         </section>
-      )}
+                  ),
+                }
+              : null,
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

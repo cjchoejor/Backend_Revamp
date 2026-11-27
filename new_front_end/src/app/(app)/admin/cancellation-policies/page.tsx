@@ -16,6 +16,7 @@ import { useSession } from "@/hooks/use-session";
 import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import { Help } from "@/components/ds/help";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { NotUsedYet, SettingsList } from "@/components/admin/settings-list";
 import { Suspense } from "react";
 import { Control } from "@/components/admin/setting-form";
@@ -86,10 +87,18 @@ export default function AdminCancellationPoliciesPage() {
         </h1>
       </div>
 
+      {/* The charge the desk applies, and the wording kept on file, a tab each (2026-11-27). */}
       <Suspense>
-        <SettingsList groups={[{ keys: ["cancellation.policyTiers"] }]} />
-      </Suspense>
-
+        <SubTabs
+          label="Cancellation policies"
+          param="tab"
+          tabs={[
+            { key: "charge", label: "The charge", content: <SettingsList groups={[{ keys: ["cancellation.policyTiers"] }]} /> },
+            {
+              key: "on-file",
+              label: "Policies on file · not used yet",
+              content: (
+                <div className="space-y-6">
       <div className="set-group">
         <h2>Policies on file</h2>
         <NotUsedYet>Nothing charges from these policies yet, and saving one does not change what the desk charges. The charge is the one above.</NotUsedYet>
@@ -173,6 +182,12 @@ export default function AdminCancellationPoliciesPage() {
           </tbody>
         </table>
       </div>
+                </div>
+              ),
+            },
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

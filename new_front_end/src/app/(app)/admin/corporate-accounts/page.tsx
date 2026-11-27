@@ -5,7 +5,8 @@ import { TitleSelect } from "@/components/ds/person-name";
 import { AdmField } from "@/components/admin/field-title";
 import { FieldTitle } from "@/components/admin/field-title";
 import { Help } from "@/components/ds/help";
-import { useState, useEffect, useRef } from "react";
+import { SubTabs } from "@/components/ds/steps/kit";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useSession } from "@/hooks/use-session";
@@ -159,7 +160,16 @@ export default function AdminCorporateAccountsPage() {
             </div>
           )}
           {selectedId != null && (
-            <>
+                        <Suspense>
+              {/* The agency's details, its packages, their history and earlier versions, a tab each (2026-11-27). */}
+              <SubTabs
+                label="Account"
+                param="part"
+                tabs={[
+                  {
+                    key: "details",
+                    label: "Details",
+                    content: (
               <div className="admin-panel space-y-4 p-5">
                 <h2 className="admin-display text-xl">
                   {isNewMode ? "New corporate account" : selected?.displayName}
@@ -363,23 +373,40 @@ export default function AdminCorporateAccountsPage() {
                 </div>
               </div>
 
-              {!isNewMode && selected && (
-                <>
-                  <RatePackagesEditor owner={{ corporateAccountId: selected.id }} ownerLabel={selected.displayName} />
-                  <div className="admin-panel p-5">
-                    <h3 className="admin-display mb-2 text-base">Rate history</h3>
-                    <RatePackageHistory owner={{ corporateAccountId: selected.id }} ownerLabel={selected.displayName} />
-                  </div>
-                  <div className="admin-panel p-5">
-                    <VersionsTab
-                      entityType="CorporateAccount"
-                      entityId={selected.id}
-                      invalidateOnRestore={[["admin", "corporate-accounts", true], ["admin", "corporate-accounts", false]]}
-                    />
-                  </div>
-                </>
-              )}
-            </>
+                    ),
+                  },
+                  !isNewMode && selected
+                    ? { key: "packages", label: "Rate packages", content: <RatePackagesEditor owner={{ corporateAccountId: selected.id }} ownerLabel={selected.displayName} /> }
+                    : null,
+                  !isNewMode && selected
+                    ? {
+                        key: "history",
+                        label: "Rate history",
+                        content: (
+                          <div className="admin-panel p-5">
+                            <RatePackageHistory owner={{ corporateAccountId: selected.id }} ownerLabel={selected.displayName} />
+                          </div>
+                        ),
+                      }
+                    : null,
+                  !isNewMode && selected
+                    ? {
+                        key: "versions",
+                        label: "Earlier versions",
+                        content: (
+                          <div className="admin-panel p-5">
+                            <VersionsTab
+                              entityType="CorporateAccount"
+                              entityId={selected.id}
+                              invalidateOnRestore={[["admin", "corporate-accounts", true], ["admin", "corporate-accounts", false]]}
+                            />
+                          </div>
+                        ),
+                      }
+                    : null,
+                ]}
+              />
+            </Suspense>
           )}
         </div>
       </div>

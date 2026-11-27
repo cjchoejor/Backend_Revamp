@@ -31,6 +31,7 @@ import type { EntryDetail } from "@/types/api";
 import { HelpHere } from "@/components/ds/help";
 import { DeskTagText } from "@/components/ds/desk-tag";
 import { GuestDetailsDialog } from "./guest-details-dialog";
+import { ApartmentAmenitiesCard } from "@/components/ds/steps/apartment-amenities";
 
 type Scalars = { corporateClientRef?: string | null };
 type Contact = { contactPersonName?: string | null; contactPersonPhone?: string | null };
@@ -174,6 +175,7 @@ export function DetailsView({
 
         <TripCard entry={entry} />
         <GuestBookingsCard entry={entry} />
+        <ApartmentAmenitiesCard entry={entry} />
 
         <StepCard title="Numbers">
           <Facts wide>

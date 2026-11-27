@@ -26,6 +26,7 @@ import { ApiError } from "@/lib/api/client";
 import { useConfirm } from "@/components/providers/dialog-provider";
 import type { Session } from "@/types/session";
 import { Help } from "@/components/ds/help";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { NotUsedYet, SettingsList } from "@/components/admin/settings-list";
 import { Control } from "@/components/admin/setting-form";
 import { codeWords } from "@/lib/admin/setting-fields";
@@ -347,12 +348,19 @@ export default function AdminTemplatesPage() {
           <Help label="Templates">The checklists the desk uses at each handoff, and the layouts kept on file.</Help>
         </h1>
       </div>
+      {/* One kind of template a tab (2026-11-27, operator: "make them into proper tabs and subtabs"). */}
       <Suspense>
-        <SettingsList groups={[{ title: "Handoff checklists", keys: PAGE_KEYS.handoffs }]} />
+        <SubTabs
+          label="Templates"
+          param="tab"
+          tabs={[
+            { key: "handoffs", label: "Handoff checklists", content: <SettingsList groups={[{ keys: PAGE_KEYS.handoffs }]} /> },
+            { key: "messages", label: "Message templates", content: <CommunicationTemplates session={session} /> },
+            { key: "invoices", label: "Invoice templates", content: <InvoiceTemplates session={session} /> },
+            { key: "work-orders", label: "Work order templates", content: <WorkOrderTemplates session={session} /> },
+          ]}
+        />
       </Suspense>
-      <CommunicationTemplates session={session} />
-      <InvoiceTemplates session={session} />
-      <WorkOrderTemplates session={session} />
     </div>
   );
 }

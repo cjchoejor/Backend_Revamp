@@ -51,16 +51,20 @@ import { NightsCard } from "./s7-nights";
 import { FlagDeficientDialog, KeysCard, KeysDueNotice, RoomsInUseCard, keysDue, keysDueWords } from "./s7-rooms";
 import { RoomsTableCard } from "./rooms-table";
 import { PayLaterNote } from "./s6-balance";
+import { ApartmentExtraBedCard } from "./s7-apartment-bed";
+import { ApartmentAmenitiesCard } from "./apartment-amenities";
 import { effectiveCheckOutIso } from "@/lib/desk/workspace";
 
 /** The sections that open from the step line, each in a pop-up over the work column. */
-type StayPopup = "nights" | "payer" | "disputes" | "guests" | "faults";
+type StayPopup = "nights" | "payer" | "disputes" | "guests" | "faults" | "aptbed" | "amenities";
 const POPUP_TITLE: Record<StayPopup, string> = {
   nights: "Night audit",
   payer: "Who pays",
   disputes: "Disputes",
   guests: "Guest details & ID proof",
   faults: "Faults in the room",
+  aptbed: "Extra bed in the apartment",
+  amenities: "What the apartment holds",
 };
 
 const ID = {
@@ -174,6 +178,13 @@ export function S7Stay({
             <IdentityProofBlock entry={entry} />
           </Tool>
         </div>
+      </WorkPopup>
+      {/* An apartment stay's extra bed and its list of items (2026-11-27). */}
+      <WorkPopup open={popup === "aptbed"} title={POPUP_TITLE.aptbed} onClose={() => setPopup(null)}>
+        <ApartmentExtraBedCard entry={entry} />
+      </WorkPopup>
+      <WorkPopup open={popup === "amenities"} title={POPUP_TITLE.amenities} onClose={() => setPopup(null)}>
+        <ApartmentAmenitiesCard entry={entry} />
       </WorkPopup>
       <WorkPopup open={popup === "faults"} title={POPUP_TITLE.faults} onClose={() => setPopup(null)}>
         <FaultsCard
@@ -365,6 +376,7 @@ function StayActs({
   const { session } = useSession();
   const gm = atLeast(session?.actorLevel, "L3");
   const severalRooms = roomsInUseFor(entry, hotelToday).length > 1;
+  const apartment = String(entry.useType ?? "") === "APARTMENT";
   const charges: ChangeBookingItem[] = [
     {
       key: "nights",
@@ -408,6 +420,24 @@ function StayActs({
       note: "Something broken in a room — reported, put right, or carried to check-out.",
       onSelect: () => onPopup("faults"),
     },
+    // An apartment stay (2026-11-27): its own extra bed, charged night by night, and its list of items.
+    ...(apartment
+      ? [
+          {
+            key: "aptbed",
+            label: "Extra bed in the apartment",
+            note: "For some nights, at the apartments' own extra bed rate — charged night by night with the rent's bill.",
+            onSelect: inHouse ? () => onPopup("aptbed") : undefined,
+            reason: inHouse ? undefined : notNow,
+          },
+          {
+            key: "amenities",
+            label: "What the apartment holds",
+            note: "Pots, plates and the rest, with how many of each — not priced.",
+            onSelect: () => onPopup("amenities"),
+          },
+        ]
+      : []),
   ];
   const items: ChangeBookingItem[] = [
     {
@@ -421,8 +451,8 @@ function StayActs({
       key: "setup",
       label: "Change extra beds or meals",
       note: "Who sleeps where, the meal plans and the extra beds — from tonight. The nights already slept stay as they were charged.",
-      onSelect: inHouse ? () => onOpen("setup") : undefined,
-      reason: inHouse ? undefined : notNow,
+      onSelect: inHouse && !apartment ? () => onOpen("setup") : undefined,
+      reason: apartment ? "An apartment has no meal plans — its extra bed is under Guests and rooms › Extra bed in the apartment" : inHouse ? undefined : notNow,
     },
     {
       key: "extend",

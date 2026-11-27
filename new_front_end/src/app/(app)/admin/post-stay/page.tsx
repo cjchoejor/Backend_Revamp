@@ -2,6 +2,7 @@
 
 import { AdmField } from "@/components/admin/field-title";
 import { Suspense, useState } from "react";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { NotUsedYet, SettingsList } from "@/components/admin/settings-list";
@@ -67,10 +68,17 @@ export default function AdminPostStayPage() {
         <h1 className="admin-display text-3xl">Feedback and records</h1>
       </div>
 
+      {/* The settings, and the surveys kept on file, a tab each (2026-11-27). */}
       <Suspense>
-        <SettingsList groups={[{ keys: PAGE_KEYS.postStay }]} />
-      </Suspense>
-
+        <SubTabs
+          label="Feedback and records"
+          param="tab"
+          tabs={[
+            { key: "settings", label: "Settings", content: <SettingsList groups={[{ keys: PAGE_KEYS.postStay }]} /> },
+            {
+              key: "surveys",
+              label: `Feedback surveys · ${templates.length}`,
+              content: (
       <div className="admin-panel space-y-3 p-5">
         <h2 className="admin-display text-lg">Feedback surveys</h2>
         <NotUsedYet>The feedback email is built in, so nothing reads these surveys yet.</NotUsedYet>
@@ -111,7 +119,11 @@ export default function AdminPostStayPage() {
           </tbody>
         </table>
       </div>
-
+              ),
+            },
+          ]}
+        />
+      </Suspense>
     </div>
   );
 }

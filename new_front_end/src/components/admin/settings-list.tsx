@@ -13,6 +13,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Help } from "@/components/ds/help";
+import { SubTabs } from "@/components/ds/steps/kit";
 import { SettingForm } from "@/components/admin/setting-form";
 import { useSession } from "@/hooks/use-session";
 import { getSettingDef, type SettingDef } from "@/lib/admin/setting-forms";
@@ -200,7 +201,20 @@ export type SettingGroup = { title?: string; help?: ReactNode; keys: string[] };
 
 const NOT_USED_HELP = "These are saved, but nothing in the system reads them yet, so changing one changes nothing. They are kept for when that part is built.";
 
-export function SettingsList({ groups }: { groups: SettingGroup[] }) {
+/** A group's tab key in the address: its title in small words. */
+const groupKey = (g: SettingGroup, i: number) =>
+  (g.title ?? `group-${i + 1}`)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "") || `group-${i + 1}`;
+
+/**
+ * A page of settings. With more than one group each group is a tab (2026-11-27, operator: "make them
+ * into proper tabs and subtabs, not just for this but any page where it is shown like this in admin
+ * console"); every tab stays drawn, so a change not saved survives a look at another. The tab is in
+ * the address (`?group=`), and `?key=` opens the tab its setting is in.
+ */
+export function SettingsList({ groups, param = "group" }: { groups: SettingGroup[]; param?: string }) {
   const { session } = useSession();
   const params = useSearchParams();
   const asked = params.get("key");
@@ -243,6 +257,59 @@ export function SettingsList({ groups }: { groups: SettingGroup[] }) {
   const live = groups.map((g) => ({ ...g, keys: g.keys.filter((k) => !isUnused(k)) })).filter((g) => g.keys.length > 0);
   const unused = groups.flatMap((g) => g.keys).filter(isUnused);
   const shown: SettingGroup[] = unused.length ? [...live, { title: "Saved, but not used yet", help: NOT_USED_HELP, keys: unused }] : live;
+
+  const rowsOf = (g: SettingGroup) => (
+    <div className="set-rows">
+      {g.keys.map((k) => (
+        <SettingRow
+          key={k}
+          settingKey={k}
+          session={session}
+          open={open.has(k)}
+          onToggle={() =>
+            setOpen((cur) => {
+              const next = new Set(cur);
+              if (next.has(k)) next.delete(k);
+              else next.add(k);
+              return next;
+            })
+          }
+        />
+      ))}
+    </div>
+  );
+
+  if (shown.length > 1) {
+    const askedIn = asked ? shown.findIndex((g) => g.keys.includes(asked)) : -1;
+    const want = params.get(param) ?? (askedIn >= 0 ? groupKey(shown[askedIn]!, askedIn) : undefined);
+    return (
+      <div className="set-tabs">
+        <SubTabs
+          label="Settings"
+          param={param}
+          value={want ?? undefined}
+          tabs={shown.map((g, i) => ({
+            key: groupKey(g, i),
+            label: (
+              <>
+                {g.title ?? (i === 0 ? "In use" : `Part ${i + 1}`)} <span className="set-tab-n">{g.keys.length}</span>
+              </>
+            ),
+            content: (
+              <section className="set-group">
+                {g.help ? (
+                  <p className="set-group-about">
+                    About these <Help label={g.title ?? "These settings"}>{g.help}</Help>
+                  </p>
+                ) : null}
+                {rowsOf(g)}
+              </section>
+            ),
+          }))}
+        />
+      </div>
+    );
+  }
 
   return (
     <>
