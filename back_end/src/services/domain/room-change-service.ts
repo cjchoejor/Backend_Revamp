@@ -2143,6 +2143,8 @@ async function changeRoomToNewSegmentInner(
       "negotiatedBreakfastRate",
       "negotiatedLunchRate",
       "negotiatedDinnerRate",
+      // An apartment's rent agreed on the booking is a rate too (2026-11-27).
+      "negotiatedRentRate",
     ] as const;
     for (const c of supplied) {
       // Extension: the rooms carrying the extra nights are FOM territory (the nights aren't

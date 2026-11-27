@@ -109,6 +109,9 @@ export type EntryRateReference = {
    */
   apartments: Array<{
     label: string;
+    /** The apartment, and the most guests it sleeps — the booking's limit for it (2026-11-27). */
+    unitId: string | null;
+    maxOccupants: number | null;
     plan: "MONTHLY" | "WEEKLY";
     packageName: string;
     leadRoomId: string;
@@ -348,6 +351,8 @@ export async function buildEntryRateReference(
     const figures = apartmentRateFigures(r.rate ?? "0", { serviceChargeRate, gstRate });
     const u = byUnit.get(r.unitLabel) ?? {
       label: r.unitLabel,
+      unitId: r.unitId ?? null,
+      maxOccupants: r.maxOccupants ?? null,
       plan: r.plan,
       packageName: r.packageName,
       leadRoomId: r.leadRoomId,

@@ -67,6 +67,12 @@ export const roomCompositionInputSchema = z.object({
   negotiatedLunchRate: z.coerce.number().min(0).optional(),
   negotiatedDinnerRate: z.coerce.number().min(0).optional(),
   /**
+   * An apartment's rent agreed for this booking, a month or a week as the booking is let, without
+   * service charge and GST (2026-11-27, operator: "edit rates we need in case we have to adjust the
+   * rent"). On any of the apartment's rows; absent, the package's own rate.
+   */
+  negotiatedRentRate: z.coerce.number().min(0).optional(),
+  /**
    * The package this one room is priced on, when it is not its room type's (2026-11-13, operator:
    * two rooms of one type on different packages). Empty means "as its room type". It must be one of
    * the booking's chosen packages.

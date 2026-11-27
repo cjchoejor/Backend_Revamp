@@ -103,6 +103,11 @@ export type RoomCompositionInput = {
 
 export type RoomRent = {
   plan: "MONTHLY" | "WEEKLY";
+  /** The apartment (2026-11-27): its id and the most guests it sleeps — the booking's limit for it. */
+  unitId?: string;
+  maxOccupants?: number;
+  /** The package's own rate for the plan, without taxes — `rate` is the one agreed for this booking. */
+  packageRate?: string;
   unitLabel: string;
   packageName: string;
   /** The apartment's first room, which carries the rent. */

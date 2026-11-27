@@ -29,6 +29,7 @@ import {
   buildPaperPriceLines,
   buildDeskPriceLines,
   buildRoomPriceLines,
+  withApartmentGuests,
   mealPlanParts,
   priceLinesToCents,
   roomOccupantsLabel,
@@ -229,7 +230,7 @@ async function linesWithoutRoomTypes(
   };
   const lines: PriceLine[] = [];
   let n = 0;
-  for (const r of rooms) {
+  for (const r of withApartmentGuests(rooms)) {
     const typeId = typeIdByRoomId.get(r.roomId) ?? null;
     const lead =
       t.ratePackagesByRoom?.[r.roomId]?.packageName?.trim() ||

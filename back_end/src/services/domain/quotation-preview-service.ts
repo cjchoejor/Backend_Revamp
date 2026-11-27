@@ -13,7 +13,7 @@
  * generated quote cannot disagree. Nothing is written: no Quotation, no QuotationLine, no trace,
  * no PDF. Re-running it has no effect on the booking.
  */
-import { rentForBookingRooms } from "./apartment-booking-service.js";
+import { enforceApartmentRows, rentForBookingRooms, rentRatesOf } from "./apartment-booking-service.js";
 import { resolveBillQuotation } from "../../lib/operative-quotation.js";
 import type { PrismaClient } from "@prisma/client";
 import { Prisma } from "@prisma/client";
@@ -384,9 +384,12 @@ export async function buildQuotationPreview(
     prisma,
     { useType: String(entry.useType), apartmentPlan: entry.apartmentPlan, checkInDate: stayCheckIn ?? null, checkOutDate: stayCheckOut ?? null },
     input.roomCompositions.map((c) => c.roomId),
+    rentRatesOf(input.roomCompositions as Array<{ roomId: string; negotiatedRentRate?: number | null }>),
   );
   if (rentByRoom.size) {
     input = { ...input, roomCompositions: input.roomCompositions.map((c) => (rentByRoom.has(c.roomId) ? { ...c, extraBedCount: 0 } : c)) };
+    // The same refusals the quotation makes (2026-11-27): no meals, the apartment's own most.
+    enforceApartmentRows(input.roomCompositions as Parameters<typeof enforceApartmentRows>[0], rentByRoom);
   }
   const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
     maxExtraBedsForRoom: (c) => (rentByRoom.has(c.roomId) ? 0 : (roomById.get(c.roomId)?.roomType?.maxExtraBeds ?? null)),

@@ -76,6 +76,8 @@ export type PriceLineComposition = {
 
 export type PriceLineRoom = {
   roomId: string;
+  /** An apartment's guests across all its rooms, on the room that carries its rent (2026-11-27). */
+  apartmentGuests?: PriceLineComposition | null;
   roomNumber: string | null;
   roomTypeName: string | null;
   /** The nights this room is priced for. */
@@ -166,27 +168,16 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
   const mode: NightsMode = r.nightsMode ?? "SHORT";
   const word = rent.plan === "MONTHLY" ? "month" : "week";
   const many = k > 1;
-  if (!rent.periods.length) {
-    // Nobody sleeping in it is said by saying nothing — "0 adults" read as a fault (2026-11-25).
-    const c = r.composition ?? undefined;
-    const someone = (c?.adultCount ?? 0) + (c?.cnb6To10Count ?? 0) + (c?.cnbUnder6Count ?? 0) > 0;
-    const who = someone ? ` · ${roomOccupantsLabel(c)}` : "";
-    return [
-      {
-        description: r.hideRoomNumber
-          ? `Part of the apartment${who}`
-          : `Room ${r.roomNumber ?? r.roomId.slice(0, 6)} · part of apartment ${rent.unitLabel}${who}`,
-        qty: "",
-        rate: null,
-        amount: 0,
-        muted: true,
-      },
-    ];
-  }
+  // An apartment is one place on the papers (2026-11-27, operator: "instead of showing as two
+  // different rooms, can we just show it as one … using only their one number"): its other rooms
+  // print nothing — the apartment's line names them and its guests, and they charge nothing.
+  if (!rent.periods.length) return [];
   const rooms = (rent.roomNumbers?.length ?? 0) > 1 ? `Rooms ${rent.roomNumbers!.join(" + ")}` : null;
+  const c = r.apartmentGuests ?? r.composition ?? undefined;
+  const guests = (c?.adultCount ?? 0) + (c?.cnb6To10Count ?? 0) + (c?.cnbUnder6Count ?? 0) > 0 ? roomOccupantsLabel(c) : null;
   const name = r.hideRoomNumber
-    ? [rent.packageName, many ? `${k} apartments` : null].filter(Boolean).join(" · ")
-    : [`Apartment ${rent.unitLabel}`, rent.packageName, rooms].filter(Boolean).join(" · ");
+    ? [rent.packageName, many ? `${k} apartments` : null, guests].filter(Boolean).join(" · ")
+    : [`Apartment ${rent.unitLabel}`, rent.packageName, rooms, guests].filter(Boolean).join(" · ");
   const whole = rent.periods.filter((p) => p.whole);
   const part = rent.periods.filter((p) => !p.whole);
   const cents = (v: string) => Math.round(Number(v) * 100);
@@ -528,7 +519,27 @@ function mealLinesByNight(
  * group's amounts are its rooms' amounts added together, so the rows still add up to the net value.
  * The desk's Charges tab keeps one row per room, with its number.
  */
-export function buildPaperPriceLines(rooms: readonly PriceLineRoom[]): PriceLine[] {
+/**
+ * Each apartment's guests added up over its rooms, set on the room that carries its rent (2026-11-27):
+ * a booking made before an apartment was one row has its guests on both rooms, and the apartment's one
+ * line must name them all.
+ */
+export function withApartmentGuests(rooms: readonly PriceLineRoom[]): PriceLineRoom[] {
+  const total = new Map<string, { adultCount: number; cnb6To10Count: number; cnbUnder6Count: number }>();
+  for (const r of rooms) {
+    if (!r.rent) continue;
+    const t = total.get(r.rent.unitLabel) ?? { adultCount: 0, cnb6To10Count: 0, cnbUnder6Count: 0 };
+    t.adultCount += r.composition?.adultCount ?? 0;
+    t.cnb6To10Count += r.composition?.cnb6To10Count ?? 0;
+    t.cnbUnder6Count += r.composition?.cnbUnder6Count ?? 0;
+    total.set(r.rent.unitLabel, t);
+  }
+  if (!total.size) return [...rooms];
+  return rooms.map((r) => (r.rent && r.rent.periods.length ? { ...r, apartmentGuests: { ...(r.composition ?? {}), ...total.get(r.rent.unitLabel)! } } : r));
+}
+
+export function buildPaperPriceLines(input: readonly PriceLineRoom[]): PriceLine[] {
+  const rooms = withApartmentGuests(input);
   const groups: Array<{ first: PriceLineRoom; key: string; count: number }> = [];
   for (const r of rooms) {
     const key = JSON.stringify(buildRoomPriceLines({ ...r, hideRoomNumber: true, roomCount: 1 }));
@@ -545,7 +556,8 @@ export function buildPaperPriceLines(rooms: readonly PriceLineRoom[]): PriceLine
  * identical rooms counted, "Premium Suite · 2 rooms" — never "Premium Suite · room 1, room 2"
  * (2026-10-30, operator). Their rows stand where the first of them stood.
  */
-export function buildDeskPriceLines(rooms: readonly PriceLineRoom[]): PriceLine[] {
+export function buildDeskPriceLines(input: readonly PriceLineRoom[]): PriceLine[] {
+  const rooms = withApartmentGuests(input);
   const quiet = rooms.filter((r) => r.roomLabel);
   const lines: PriceLine[] = [];
   let quietDone = false;

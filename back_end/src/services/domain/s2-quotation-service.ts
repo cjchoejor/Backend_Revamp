@@ -57,7 +57,7 @@ import {
   type RoomCompositionRateContext,
 } from "../../lib/room-composition.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
-import { rentForBookingRooms } from "./apartment-booking-service.js";
+import { enforceApartmentRows, rentForBookingRooms, rentRatesOf } from "./apartment-booking-service.js";
 import { Prisma } from "@prisma/client";
 import { enforceExtraBedForThirdAdult } from "../../policies/34-room-composition/p78-extra-bed-required-for-third-adult.js";
 import {
@@ -158,6 +158,8 @@ export type RoomCompositionServiceInput = {
   negotiatedBreakfastRate?: number;
   negotiatedLunchRate?: number;
   negotiatedDinnerRate?: number;
+  /** An apartment's rent agreed for this booking, a month or a week, without taxes (2026-11-27). */
+  negotiatedRentRate?: number;
   /** This room's own package, when not its room type's (2026-11-13). */
   ratePackageId?: string | null;
   serviceChargeApplies?: boolean;
@@ -562,9 +564,10 @@ async function prepareQuotationDraft(
     // `commercialTerms.extraBedsAutoAdded` so the desk and the document trail can say so.
     // An apartment's rooms take no extra bed (2026-11-25): it is let for its guests, up to its own
     // most, and priced by its rent; a bed typed on one is dropped rather than charged at nothing.
-    const apartmentRent = await rentForBookingRooms(prisma, entry, roomIds);
+    const apartmentRent = await rentForBookingRooms(prisma, entry, roomIds, rentRatesOf(input.roomCompositions));
     if (apartmentRent.size) {
       input.roomCompositions = input.roomCompositions.map((c) => (apartmentRent.has(c.roomId) ? { ...c, extraBedCount: 0 } : c));
+      enforceApartmentRows(input.roomCompositions, apartmentRent);
     }
     const bedNorm = autoAddRequiredExtraBeds(input.roomCompositions, {
       maxExtraBedsForRoom: (c) => (apartmentRent.has(c.roomId) ? 0 : maxExtraBedsByRoomId.get(c.roomId)),

@@ -10,7 +10,8 @@
  * What each package would come to for the stay is the rent rule's (lib/apartment-rent.ts), server
  * figures only.
  */
-import { Stage, type PrismaClient } from "@prisma/client";
+import { Prisma, Stage, type PrismaClient } from "@prisma/client";
+import { round2 } from "../../lib/money.js";
 import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import { readOptionSelected } from "../../lib/option-selected-reader.js";
 import { findRoomBookingConflicts } from "../../lib/room-booking-conflicts.js";
@@ -294,6 +295,8 @@ export async function rentForBookingRooms(
   prisma: PrismaClient,
   entry: { useType: string | null; apartmentPlan?: string | null; checkInDate: Date | null; checkOutDate: Date | null },
   roomIds: string[],
+  /** A rent agreed on this booking, by any room of its apartment (2026-11-27) — a month or a week, without taxes. */
+  rentRates?: Map<string, number>,
 ): Promise<Map<string, RoomRent>> {
   const out = new Map<string, RoomRent>();
   const plan = entry.apartmentPlan as ApartmentPlan | null | undefined;
@@ -302,21 +305,83 @@ export async function rentForBookingRooms(
   const packageIds = [...new Set([...apartments.values()].map((a) => a.packageId))];
   const packages = await prisma.apartmentPackage.findMany({ where: { id: { in: packageIds } }, select: { id: true, weeklyRate: true, monthlyRate: true } });
   const rateOf = new Map(packages.map((p) => [p.id, plan === "MONTHLY" ? p.monthlyRate : p.weeklyRate]));
+  // The rent agreed for each apartment, read off any of its rooms.
+  const agreedOf = new Map<string, Prisma.Decimal>();
+  for (const [roomId, rate] of rentRates ?? []) {
+    const a = apartments.get(roomId);
+    if (a && Number.isFinite(rate) && rate >= 0 && !agreedOf.has(a.unitId)) agreedOf.set(a.unitId, round2(new Prisma.Decimal(rate)));
+  }
   for (const roomId of roomIds) {
     const a = apartments.get(roomId);
     if (!a) continue;
     const lead = a.roomIds.find((id) => roomIds.includes(id)) ?? a.roomIds[0];
+    const own = rateOf.get(a.packageId) ?? new Prisma.Decimal(0);
+    const rate = agreedOf.get(a.unitId) ?? own;
     out.set(roomId, {
       plan,
+      unitId: a.unitId,
+      maxOccupants: a.maxOccupants,
+      packageRate: own.toString(),
       unitLabel: a.label,
       packageName: a.packageName,
       leadRoomId: lead,
       roomNumbers: a.roomNumbers,
-      rate: (rateOf.get(a.packageId) ?? 0).toString(),
-      periods: roomId === lead ? rentPeriods(plan, entry.checkInDate, entry.checkOutDate, rateOf.get(a.packageId) ?? 0) : [],
+      rate: rate.toString(),
+      periods: roomId === lead ? rentPeriods(plan, entry.checkInDate, entry.checkOutDate, rate) : [],
     });
   }
   return out;
+}
+
+/** The rent agreed on a booking's rows, by room (2026-11-27). */
+export function rentRatesOf(rows: Array<{ roomId: string; negotiatedRentRate?: number | null }>): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const r of rows) if (r.negotiatedRentRate != null && Number.isFinite(Number(r.negotiatedRentRate))) m.set(r.roomId, Number(r.negotiatedRentRate));
+  return m;
+}
+
+/**
+ * An apartment is let as one place (2026-11-27, operator: "they don't need the meal plan option since
+ * they will be cooking by themselves"; "the max occupant should be the apartment's max, not by
+ * combining two rooms"): no meals on its rows, and its guests — across its rooms — at most its own
+ * most. Refused in words before anything is priced.
+ */
+export function enforceApartmentRows(
+  rows: Array<{
+    roomId: string;
+    adultCount?: number;
+    cnb6To10Count?: number;
+    cnbUnder6Count?: number;
+    mealPlanCpCount?: number;
+    mealPlanMaplCount?: number;
+    mealPlanMapdCount?: number;
+    mealPlanApCount?: number;
+    mealPlanOthersCount?: number;
+    othersBreakfastPax?: number;
+    othersLunchPax?: number;
+    othersDinnerPax?: number;
+    nightMealOverrides?: unknown[];
+  }>,
+  rent: Map<string, RoomRent>,
+) {
+  const n = (v: number | undefined) => v ?? 0;
+  const guestsOf = new Map<string, { label: string; max: number; guests: number }>();
+  for (const r of rows) {
+    const a = rent.get(r.roomId);
+    if (!a) continue;
+    const meals =
+      n(r.mealPlanCpCount) + n(r.mealPlanMaplCount) + n(r.mealPlanMapdCount) + n(r.mealPlanApCount) + n(r.mealPlanOthersCount) + n(r.othersBreakfastPax) + n(r.othersLunchPax) + n(r.othersDinnerPax);
+    if (meals > 0 || (r.nightMealOverrides?.length ?? 0) > 0) {
+      throw new ValidationError(`Apartment ${a.unitLabel} has no meal plans — its guests cook for themselves. Take the meals off it`);
+    }
+    const key = a.unitId ?? a.unitLabel;
+    const g = guestsOf.get(key) ?? { label: a.unitLabel, max: a.maxOccupants ?? Number.POSITIVE_INFINITY, guests: 0 };
+    g.guests += n(r.adultCount) + n(r.cnb6To10Count) + n(r.cnbUnder6Count);
+    guestsOf.set(key, g);
+  }
+  for (const g of guestsOf.values()) {
+    if (g.guests > g.max) throw new ValidationError(`Apartment ${g.label} sleeps at most ${g.max} guests — ${g.guests} are on it`);
+  }
 }
 
 /**
