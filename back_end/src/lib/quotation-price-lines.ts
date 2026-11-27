@@ -188,7 +188,9 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
     const amount = whole.reduce((t, p) => t + cents(before(p)), 0) / 100;
     lines.push({
       dates: labelRoomNights(nightsFromTo(whole[0].from, whole[whole.length - 1].to), mode),
-      description: `${name} · let ${rent.plan === "MONTHLY" ? "monthly" : "weekly"}`,
+      // Said as what it is (2026-11-27, operator: "what is let monthly … it needs to show that it was
+      // chosen as monthly basis rent"): "Monthly rent", the qty in months, the rate a month.
+      description: `${name} · ${rent.plan === "MONTHLY" ? "monthly" : "weekly"} rent`,
       qty: `${many ? `${k} × ` : ""}${whole.length} ${word}${whole.length === 1 ? "" : "s"}`,
       rate: Number(before(whole[0])),
       amount: amount * k,
@@ -199,8 +201,8 @@ function rentHeadLines(r: PriceLineRoom, rent: RoomRent, k: number): PriceLine[]
     lines.push({
       dates: labelRoomNights(nightsFromTo(p.from, p.to), mode),
       description: whole.length
-        ? `${p.nights} of the next ${word}'s ${p.ofNights} nights`
-        : `${name} · ${p.nights} of a ${word}'s ${p.ofNights} nights`,
+        ? `Rent for ${p.nights} of the next ${word}'s ${p.ofNights} nights · a share of the ${word}'s rent`
+        : `${name} · rent for ${p.nights} of a ${word}'s ${p.ofNights} nights · a share of the ${rent.plan === "MONTHLY" ? "monthly" : "weekly"} rent`,
       qty: `${many ? `${k} × ` : ""}${p.nights} night${p.nights === 1 ? "" : "s"}`,
       rate: null,
       amount: (cents(before(p)) / 100) * k,

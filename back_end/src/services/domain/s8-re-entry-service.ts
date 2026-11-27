@@ -8,6 +8,7 @@ import { loadEntryDetail } from "../../lib/entry-detail-include.js";
 import { collectRoomsHeldByEntry, transitionRoomClaimState } from "../../lib/room-claim-state.js";
 import { enforceEntryActiveForStageTransition } from "../../policies/01-availability/p01-entry-progression-stage-gates.js";
 import { retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
+import { CHECKOUT_RELEASE_REASON } from "../../lib/rooms-released-by-booking.js";
 
 /**
  * SIG-S8 §3.7 — S8→S7 re-entry (additional charge path).
@@ -83,8 +84,14 @@ export async function reEnterS8ToS7(
     // next checkout attempt, and the S8 exit gates (which check for OCCUPIED) would
     // otherwise fail. Skip if the room isn't DEPARTED_DIRTY (concurrent housekeeping or
     // partial states shouldn't be clobbered).
+    //
+    // Only a room this booking let go AT CHECK-OUT (2026-11-27, found on the hotel's ENT-20261127-0006:
+    // Back to Stay marked Rooms 702 and 5052 occupied again, rooms the guest had moved out of that
+    // evening). A room left mid-stay — a room change, one room released early — stays left.
     const heldRooms = await collectRoomsHeldByEntry(tx, entryId);
     for (const roomId of heldRooms) {
+      const last = await tx.roomClaimStateEvent.findFirst({ where: { roomId, entryId }, orderBy: { createdAt: "desc" }, select: { reason: true } });
+      if (!(last?.reason ?? "").startsWith(CHECKOUT_RELEASE_REASON)) continue;
       await transitionRoomClaimState(tx, {
         roomId,
         toState: InventoryClaimState.OCCUPIED,

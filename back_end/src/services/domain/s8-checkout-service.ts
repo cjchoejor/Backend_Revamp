@@ -32,7 +32,7 @@ const HELD_FOR_ANOTHER: ReadonlySet<InventoryClaimState> = new Set([
   InventoryClaimState.COMMITTED_HELD,
   InventoryClaimState.SPECULATIVELY_HELD,
 ]);
-import { effectiveCheckOutDate } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
 import { countOutstandingKeys } from "./room-key-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
 import { reportDeficiency } from "./deficient-condition-service.js";
@@ -548,6 +548,36 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   // check-in. Either way the checkout is recorded against this booking, which is what says the
   // guest let the room go.
 
+  // Another booking's guest in the room NOW (2026-11-27, found on the hotel's ENT-20261127-0006: the
+  // guest left before sleeping a night and the hotel booked them again into the same room, Room 7031,
+  // as ENT-20261127-0024 — closing the first bill would have marked 7031 departed and dirty and reset
+  // its bed under the guest now in it). Such a room is recorded as let go by THIS booking and left as
+  // it is: its flag, its cleaning state and its bed are the other booking's.
+  const todayYmd = hotelTodayUtc().toISOString().slice(0, 10);
+  const ymdOf = (d: Date | null | undefined) => (d ? d.toISOString().slice(0, 10) : null);
+  const otherRows = await prisma.roomAssignment.findMany({
+    where: {
+      roomId: { in: assignmentsToCheckOut.map((a) => a.roomId) },
+      entryId: { not: entryId },
+      entry: { status: "ACTIVE", currentStage: { in: [Stage.S6, Stage.S7, Stage.S8] } },
+    },
+    select: {
+      roomId: true,
+      startDate: true,
+      endDate: true,
+      entry: { select: { id: true, currentStage: true, checkInDate: true, checkOutDate: true, actualCheckOutDate: true, reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true } } } },
+    },
+  });
+  const otherGuestIn = new Map<string, string>();
+  for (const r of otherRows) {
+    const from = ymdOf(r.startDate ?? r.entry.checkInDate);
+    const to = ymdOf(r.endDate ?? effectiveCheckOutDate(r.entry));
+    if (!from || !to || from >= to) continue; // a room never slept in
+    // In house: tonight is one of the row's nights. At check-out: the guest is in it until they settle.
+    const inNow = r.entry.currentStage === Stage.S8 ? from <= todayYmd && todayYmd <= to : from <= todayYmd && todayYmd < to;
+    if (inNow) otherGuestIn.set(r.roomId, r.entry.id);
+  }
+
   const windowMinutes = Number(await requireActiveConfigValue<number>(prisma as any, "housekeeping.sla.windowMinutes"));
   if (!Number.isFinite(windowMinutes) || windowMinutes < 1) throw new MissingConfigurationError("housekeeping.sla.windowMinutes");
 
@@ -564,6 +594,20 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
     const ids: string[] = [];
     for (const a of assignmentsToCheckOut) {
       const from = a.room.currentClaimState;
+      const otherGuest = otherGuestIn.get(a.room.id);
+      if (otherGuest) {
+        await tx.roomClaimStateEvent.create({
+          data: {
+            roomId: a.room.id,
+            entryId,
+            fromState: from,
+            toState: from,
+            actorId,
+            reason: `${CHECKOUT_RELEASE_REASON} — another booking's guest is in the room now (${otherGuest}); the room is left as it is`,
+          },
+        });
+        continue;
+      }
       const heldForAnother = HELD_FOR_ANOTHER.has(from);
       if (!heldForAnother) {
         await tx.room.update({ where: { id: a.room.id }, data: { currentClaimState: InventoryClaimState.DEPARTED_DIRTY } });
@@ -629,7 +673,8 @@ export async function completeCheckoutPhysicalDeparture(db: DbClient, entryId: s
   // Legacy return: single room for non-group entries (preserves the existing signature that
   // callers rely on). For groups we return the first — callers rendering N rooms should
   // fetch the fresh assignments list instead of relying on the return value.
-  return prisma.room.findUniqueOrThrow({ where: { id: updatedRoomIds[0] } });
+  // Every room left was another guest's by now: nothing moved, the first room stands for the return.
+  return prisma.room.findUniqueOrThrow({ where: { id: updatedRoomIds[0] ?? assignmentsToCheckOut[0].roomId } });
 }
 
 export async function ensureDisputeGateClearForS9(prisma: PrismaClient, entryId: string) {

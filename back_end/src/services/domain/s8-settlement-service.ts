@@ -540,8 +540,9 @@ export async function initiateSettlement(
     const bucketClosedAfter = bucketAfterDec.equals(0);
     const bucketAfter = Number(bucketAfterDec.toFixed(2));
 
-    // Direct bill → always OUTSTANDING and issue invoice (bucket-tagged when split)
-    if (billing === "DIRECT_BILL" || method === "DIRECT_BILL") {
+    // Direct bill → issue the invoice (bucket-tagged when split) — only when something is owed
+    // (2026-11-27): a bill at nil closes with no invoice to the company, as a voucher at nil does.
+    if ((billing === "DIRECT_BILL" || method === "DIRECT_BILL") && outstandingDecScoped.gt(0)) {
       const { templateKey, metadata } = await resolveGroupInvoiceOverrides(tx, folio.entryId, "final-v1", {
         settlementMethod: method,
         billingModel: billing,
