@@ -1193,37 +1193,87 @@ function GroupGuests({ shape, g, childMaxAge, set, entryId }: { shape: GroupShap
   );
 }
 
-/** Move a booking that holds the room and has not arrived to another room (2026-11-26). */
-function MoveHolderDialog({ room, holder, onClose, onMove }: { room: AddRoomRow | null; holder: AddRoomHolder | null; onClose: () => void; onMove: (legs: RoomMoveLegInput[]) => void }) {
+/** How a night's booking stands, as a tag's colour: in the room · reserved or arriving · held · out of service. */
+const tagTone = (state: string | undefined) =>
+  state && /In house|Checking in|Checking out|Still in|Leaving today/.test(state) ? "in" : state && /Reserved|Arriving/.test(state) ? "res" : state && /Held|Picked/.test(state) ? "held" : "out";
+
+/**
+ * Who holds a room on a night (2026-11-27, operator: "the last column only shows move the room option but
+ * user can't say if one of the booking is occupied which can't be moved … when user clicks on the status
+ * then it can show which guest booked it"): their booking, where it stands, their nights in this room —
+ * and moving them to another room when it can be done (a guest not arrived yet); else why not.
+ */
+function HolderDialog({
+  room,
+  holder,
+  date,
+  state,
+  onClose,
+  onMove,
+}: {
+  room: AddRoomRow | null;
+  holder: AddRoomHolder | null;
+  date: string;
+  state: string;
+  onClose: () => void;
+  onMove: (legs: RoomMoveLegInput[]) => void;
+}) {
   const [to, setTo] = useState<string | null>(null);
   useEffect(() => setTo(null), [holder]);
   if (!room || !holder) return null;
+  const can = holder.swappable && holder.rooms.length > 0;
+  const nights = [...holder.nightsInRoom].sort();
+  const here = nights.length ? `${fmtDay(nights[0])} – ${fmtDay(addDays(nights[nights.length - 1], 1))} · ${nightsWord(nights.length)}` : "—";
   return (
     <DsDialog
       open
       onClose={onClose}
-      title={`Move ${holder.guestName ?? "their booking"} out of Room ${room.roomNumber}`}
-      caseLines={[holder.entryId]}
+      title={`Room ${room.roomNumber} · ${fmtDay(date)}`}
+      caseLines={[holder.bookingRef ?? holder.entryId]}
       footer={
         <>
           <NotNow onClick={onClose} />
-          <Button className={to ? "go" : undefined} state={to ? "default" : "inert"} reason={to ? undefined : "pick a room for them"} onClick={() => onMove([{ entryId: holder.entryId, fromRoomId: room.roomId, toRoomId: to! }])}>
-            {to ? `Move them to Room ${holder.rooms.find((r) => r.roomId === to)?.roomNumber}` : "Move them"}
-          </Button>
+          {can ? (
+            <Button className={to ? "go" : undefined} state={to ? "default" : "inert"} reason={to ? undefined : "pick a room for them"} onClick={() => onMove([{ entryId: holder.entryId, fromRoomId: room.roomId, toRoomId: to! }])}>
+              {to ? `Move them to Room ${holder.rooms.find((r) => r.roomId === to)?.roomNumber}` : "Move them"}
+            </Button>
+          ) : null}
         </>
       }
     >
-      <p className="sm" style={{ marginTop: 0 }}>
-        {holder.guestName ?? "Their booking"} ({holder.bookingRef ?? holder.entryId}) holds Room {room.roomNumber} for{" "}
-        {holder.nightsInRoom.map((d) => fmtDay(d)).join(", ")} and has not arrived. They keep their price for the same type; their papers are made again and held.
-      </p>
-      {holder.rooms.length ? (
+      <div className="ar-holder" data-holder={holder.entryId}>
+        <div className="ar-holder-who">
+          <span className={`ar-tag ${tagTone(state)}`}>{state}</span>
+          <b>{holder.guestName ?? "A guest"}</b>
+          {holder.partyName ? <span className="sm">· {holder.partyName}</span> : null}
+        </div>
+        <dl className="ar-holder-facts">
+          <dt>Booking</dt>
+          <dd>
+            <Link href={`/bookings/${holder.entryId}`}>{holder.bookingRef ?? holder.entryId}</Link> · at {stepWord(holder.stage)}
+          </dd>
+          <dt>In this room</dt>
+          <dd>{here}</dd>
+          {holder.checkIn && holder.checkOut ? (
+            <>
+              <dt>Their stay</dt>
+              <dd>
+                <StayDates checkIn={holder.checkIn} checkOut={holder.checkOut} />
+              </dd>
+            </>
+          ) : null}
+        </dl>
+      </div>
+      {can ? (
         <div className="field">
-          <label>A free room for them</label>
+          <label>Move them to a free room</label>
           <Choice options={holder.rooms.map((r) => [r.roomId, `Room ${r.roomNumber}${r.roomTypeName ? ` · ${r.roomTypeName}` : ""}${r.sameType ? "" : " · another type"}`] as const)} value={to} onChange={setTo} />
+          <p className="sm" style={{ margin: 0 }}>They keep their price for the same type; their papers are made again and held.</p>
         </div>
       ) : (
-        <p className="sm warn-ink">No room is free for their nights.</p>
+        <p className="sm warn-ink" role="status" style={{ margin: 0 }}>
+          {holder.why ?? (holder.swappable ? "No room is free for their nights — their booking can't be moved" : "Their booking can't be moved from here")}
+        </p>
       )}
     </DsDialog>
   );
@@ -1342,7 +1392,30 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
   const [faultsOf, setFaultsOf] = useState<Record<string, string[]>>({});
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<AddRoomsOutcome | null>(null);
-  const [moveFor, setMoveFor] = useState<{ room: AddRoomRow; holder: AddRoomHolder } | null>(null);
+  const [holderFor, setHolderFor] = useState<{ room: AddRoomRow; holder: AddRoomHolder; date: string; state: string } | null>(null);
+  /** The rooms on the whole screen (2026-11-27, operator: "need a full screen page for this"); the page behind holds still. */
+  const [roomsFull, setRoomsFull] = useState(false);
+  const fullFromY = useRef(0);
+  useEffect(() => {
+    if (!roomsFull) return;
+    const onKey = (e: KeyboardEvent) => {
+      // A pop-up over it takes its own Escape.
+      if (e.key === "Escape" && !document.querySelector(".scrim.open")) setRoomsFull(false);
+    };
+    const html = document.documentElement;
+    const was = html.style.overflow;
+    const y = fullFromY.current;
+    html.style.overflow = "hidden";
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      html.style.overflow = was;
+      window.scrollTo(0, y);
+      requestAnimationFrame(() => {
+        if (window.scrollY !== y) window.scrollTo(0, y);
+      });
+    };
+  }, [roomsFull]);
   const [legs, setLegs] = useState<RoomMoveLegInput[] | null>(null);
   const idOf = (n: number) => `ar-part-${n}-${entry.id}`;
   const goTo = (n: number) => {
@@ -1695,7 +1768,33 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
             onEdit={() => goTo(PART.rooms)}
           />
           {stateOf(PART.rooms) === "open" ? (
-            <>
+            <div className={`house-fullwrap${roomsFull ? " on" : ""}`} role={roomsFull ? "dialog" : undefined} aria-label={roomsFull ? "The rooms, full screen" : undefined} data-rooms-full={roomsFull ? "" : undefined}>
+              {roomsFull ? (
+                <div className="house-fullbar">
+                  <b>The rooms</b>
+                  {arrive && leave ? <StayDates checkIn={arrive} checkOut={leave} /> : null}
+                  <span className="meta" style={{ marginLeft: "auto" }}>
+                    Esc to leave
+                  </span>
+                  <Button kind="secondary" compact onClick={() => setRoomsFull(false)}>
+                    Close full screen
+                  </Button>
+                </div>
+              ) : (
+                <div className="ar-tools">
+                  <span className="sm muted">Click a booked night to see whose it is</span>
+                  <Button
+                    kind="secondary"
+                    compact
+                    onClick={() => {
+                      fullFromY.current = window.scrollY;
+                      setRoomsFull(true);
+                    }}
+                  >
+                    Full screen
+                  </Button>
+                </div>
+              )}
               <div className="ar-wrap">
                 <table className="table ar-table" data-no-pending>
                   <thead>
@@ -1716,7 +1815,6 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                   <tbody>
                     {p.rooms.map((r) => {
                       const on = picked.includes(r.roomId);
-                      const movable = r.holders.find((h) => h.swappable && h.rooms.length > 0) ?? null;
                       const toggle = () => set({ picked: on ? picked.filter((x) => x !== r.roomId) : [...picked, r.roomId] });
                       return (
                         <tr key={r.roomId} className={`${on ? "on" : ""}${r.selectable ? "" : " shut"}`} onClick={r.selectable ? toggle : undefined} title={r.why ?? undefined} data-room={r.roomNumber}>
@@ -1730,11 +1828,35 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                             {r.roomTypeName ?? "—"}
                             {r.bedType ? ` · ${r.bedType.toLowerCase()}` : ""}
                           </td>
-                          {r.perNight.map((n) => (
-                            <td key={n.date} className={`ar-cell ${n.status === "FREE" ? (r.needsCleaning ? "dirty" : "free") : n.status === "RESERVED" || n.status === "HELD" ? "taken" : "out"}`}>
-                              {n.status === "FREE" ? (r.needsCleaning ? "To clean" : "Free") : n.guest ?? STATUS_WORD[n.status]}
-                            </td>
-                          ))}
+                          {r.perNight.map((n) => {
+                            const h = n.entryId ? (r.holders.find((x) => x.entryId === n.entryId) ?? null) : null;
+                            if (h) {
+                              const state = n.state ?? STATUS_WORD[n.status];
+                              return (
+                                <td key={n.date} className="ar-cell">
+                                  <button
+                                    type="button"
+                                    className={`ar-tag ${tagTone(state)}`}
+                                    title={`${n.guest ?? "A guest"} — see the booking`}
+                                    data-night={n.date}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setHolderFor({ room: r, holder: h, date: n.date, state });
+                                    }}
+                                  >
+                                    {state}
+                                  </button>
+                                </td>
+                              );
+                            }
+                            // A room to clean matters tonight only; it is cleaned before a later night.
+                            const toClean = r.needsCleaning && n.date === today;
+                            return (
+                              <td key={n.date} className={`ar-cell ${n.status === "FREE" ? (toClean ? "dirty" : "free") : n.status === "RESERVED" || n.status === "HELD" ? "taken" : "out"}`}>
+                                {n.status === "FREE" ? (toClean ? "To clean" : "Free") : (n.state ?? STATUS_WORD[n.status])}
+                              </td>
+                            );
+                          })}
                           <td className="num money">{r.roomRate != null ? money(r.roomRate) : "—"}</td>
                           {leaveDays.length > 1 ? (
                             <td onClick={(e) => e.stopPropagation()}>
@@ -1761,24 +1883,7 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                               ) : null}
                             </td>
                           ) : null}
-                          <td>
-                            {movable ? (
-                              <Button
-                                kind="secondary"
-                                compact
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setMoveFor({ room: r, holder: movable });
-                                }}
-                              >
-                                Move their booking
-                              </Button>
-                            ) : r.holders.length && !r.selectable ? (
-                              <span className="sm muted">{r.holders[0].why ?? "held"}</span>
-                            ) : r.why && !r.selectable ? (
-                              <span className="sm muted">{r.why.split(" — ")[0]}</span>
-                            ) : null}
-                          </td>
+                          <td className="sm muted ar-why">{r.why ? r.why.split(" — ")[0] : null}</td>
                         </tr>
                       );
                     })}
@@ -1792,8 +1897,15 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
                   ))}
                 </ul>
               ) : null}
-              <PartDone ready={!part2Why} why={part2Why} onDone={() => goTo(PART.who)} />
-            </>
+              <PartDone
+                ready={!part2Why}
+                why={part2Why}
+                onDone={() => {
+                  setRoomsFull(false);
+                  goTo(PART.who);
+                }}
+              />
+            </div>
           ) : null}
         </div>
 
@@ -1982,12 +2094,15 @@ export function AddRoom({ entry }: { entry: EntryDetail }) {
         </ul>
       </DsDialog>
 
-      <MoveHolderDialog
-        room={moveFor?.room ?? null}
-        holder={moveFor?.holder ?? null}
-        onClose={() => setMoveFor(null)}
+      <HolderDialog
+        room={holderFor?.room ?? null}
+        holder={holderFor?.holder ?? null}
+        date={holderFor?.date ?? ""}
+        state={holderFor?.state ?? ""}
+        onClose={() => setHolderFor(null)}
         onMove={(l) => {
-          setMoveFor(null);
+          setHolderFor(null);
+          setRoomsFull(false);
           setLegs(l);
         }}
       />

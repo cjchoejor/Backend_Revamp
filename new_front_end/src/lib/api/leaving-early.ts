@@ -176,7 +176,19 @@ export type AddRoomRow = {
   maxExtraBeds: number | null;
   maxChildren: number | null;
   availability: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
-  perNight: Array<{ date: string; status: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE"; guest: string | null; bookingRef: string | null }>;
+  /**
+   * Each night: who holds it and how their booking stands — "Reserved", "Arriving", "In house", "Still in"
+   * (2026-11-27). `entryId` names one of `holders`.
+   */
+  perNight: Array<{
+    date: string;
+    status: "FREE" | "RESERVED" | "HELD" | "BLOCKED" | "MAINTENANCE";
+    guest: string | null;
+    bookingRef: string | null;
+    entryId?: string | null;
+    stage?: string | null;
+    state?: string;
+  }>;
   selectable: boolean;
   why: string | null;
   needsCleaning: boolean;
