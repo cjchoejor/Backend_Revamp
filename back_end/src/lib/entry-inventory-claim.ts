@@ -18,7 +18,7 @@
  *  - **Finished bookings blocked forever.** With no status filter, every CLOSED / EXPIRED /
  *    CANCELLED entry kept blocking its rooms for its old dates.
  */
-import { EntryStatus, type Prisma, type PrismaClient } from "@prisma/client";
+import { EntryStatus, Stage, type Prisma, type PrismaClient } from "@prisma/client";
 
 /**
  * Statuses whose bookings have let go of their rooms.
@@ -97,7 +97,14 @@ export async function keepStandingReservations<T extends { entryId: string; segm
  * lapses the reservation answers for the rooms, night by night.
  */
 export function committedHoldClaimsWhere(now: Date = new Date()) {
-  return { OR: [{ state: "PLACED" as const }, { state: "CONFIRMED" as const, expiresAt: { gt: now } }] };
+  return {
+    OR: [{ state: "PLACED" as const }, { state: "CONFIRMED" as const, expiresAt: { gt: now } }],
+    // Once the guest is in house the booking's night rows are its rooms (2026-11-27): a room taken off
+    // the stay or leaving early ends its row, and the hold made at Set up — which still lists the room on
+    // every night — must not keep claiming the nights it gave up (Room 201 of TEST-ED-LE4 was held for a
+    // night after it was removed). Every in-house room has its row, so nothing the guest uses is freed.
+    AND: [{ entry: { currentStage: { notIn: [Stage.S7, Stage.S8, Stage.S9] } } }],
+  };
 }
 
 /** The select needed by `reservedEntrySpans` / `roomsClaimedByReservedEntry`. */
