@@ -35,6 +35,19 @@ export async function listStayChargeGapsForCompleteAuditStayNightsS8ToS9(
   return gaps;
 }
 
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayWords = (iso: string) => {
+  const [y, m, d] = iso.split("-").map(Number);
+  return `${d} ${MONTHS[m - 1]} ${y}`;
+};
+
+/** The refusal in the desk's words: which nights have no room charge on the bill. */
+export function missingRoomChargeWords(isoDates: string[]): string {
+  const days = isoDates.map(dayWords);
+  const list = days.length > 1 ? `${days.slice(0, -1).join(", ")} and ${days[days.length - 1]}` : days[0];
+  return `The bill has no room charge for the night${days.length > 1 ? "s" : ""} of ${list}, though the hotel's night audit ran for ${days.length > 1 ? "them" : "it"}`;
+}
+
 /** @deprecated Prefer `listStayChargeGapsForCompleteAuditStayNightsS8ToS9` + aggregate errors. */
 export async function enforceRoomChargePostedForCompleteAuditStayNightsS8ToS9(
   prisma: PrismaClient,
@@ -45,6 +58,6 @@ export async function enforceRoomChargePostedForCompleteAuditStayNightsS8ToS9(
   if (!roomDates.length) return;
   throw new PolicyGateBlockedError(
     "UNPOSTED_ROOM_CHARGE_AT_S8_EXIT",
-    `Stay night(s) with COMPLETE night audit but no ROOM_CHARGE folio line: ${roomDates.join(", ")}`,
+    missingRoomChargeWords(roomDates),
   );
 }

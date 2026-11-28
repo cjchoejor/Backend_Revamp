@@ -3,12 +3,13 @@ import { HandoffType, Stage } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import type { StageGateFailureItem } from "./errors.js";
 import * as disputeGateEngine from "../engines/dispute-gate-engine.js";
-import { listStayChargeGapsForCompleteAuditStayNightsS8ToS9 } from "../policies/24-night-audit/p62-room-charge-present-for-complete-audit-s8-to-s9.js";
+import { listStayChargeGapsForCompleteAuditStayNightsS8ToS9, missingRoomChargeWords } from "../policies/24-night-audit/p62-room-charge-present-for-complete-audit-s8-to-s9.js";
 import { peekH4S8ExitFailure } from "../policies/25-handoff/p63-handoff-lifecycle-gates.js";
 import { readBookingInspectionStanding, roomListWords } from "./room-inspection-standing.js";
 import { readRoomsReleasedByBooking } from "./rooms-released-by-booking.js";
 import { readBookingDamages, unansweredDamageRooms } from "./damage-standing.js";
 import { damageNotAnsweredForS8Exit } from "../policies/36-damage-assessment/p81-damage-assessment-gates.js";
+import { effectiveCheckOutDate } from "./stay-dates.js";
 
 export type EntryWithFolioReservation = Prisma.EntryGetPayload<{
   include: { folio: true; reservation: true };
@@ -31,22 +32,34 @@ export async function collectS8ToS9ReadOnlyFailures(
   if (unresolvedAnomalyCount > 0) {
     failures.push({
       blockingCondition: "NIGHT_AUDIT_ANOMALY_UNRESOLVED",
-      message: `Unresolved night audit anomalies for this entry (${unresolvedAnomalyCount}) block S8→S9`,
+      message: `The night audit flagged ${unresolvedAnomalyCount === 1 ? "a problem" : `${unresolvedAnomalyCount} problems`} on this booking's bill that ${unresolvedAnomalyCount === 1 ? "is" : "are"} not settled yet`,
     });
   }
 
   const folio = entry.folio;
   if (folio && entry.reservation) {
+    // The nights the guest stayed: to the day they left when they left early (2026-11-28, the
+    // hotel's ENT-20261124-0026 — it left on 26 Nov, booked to 29 Nov, and the nights after it left
+    // were read as nights with no room charge, so it could never move to Closed).
+    const checkOut = effectiveCheckOutDate(entry) ?? entry.reservation.frozenCheckOutDate;
     const gaps = await listStayChargeGapsForCompleteAuditStayNightsS8ToS9(prisma, {
       folioId: folio.id,
       checkIn: entry.reservation.frozenCheckInDate,
-      checkOut: entry.reservation.frozenCheckOutDate,
+      checkOut,
     });
-    const roomDates = gaps.map((g) => g.operatingDateIso);
+    // A night is not missing its charge when this booking's own rule says it is posted: no room
+    // held that night (every room had left), or an apartment's rent period whose line is on its
+    // first night. The same rule the move to Check-out reads (isBookingNightPosted).
+    const { isBookingNightPosted } = await import("../services/application/s7-night-audit-service.js");
+    const stillMissing: typeof gaps = [];
+    for (const g of gaps) {
+      if (!(await isBookingNightPosted(prisma, entryId, new Date(`${g.operatingDateIso}T00:00:00.000Z`)))) stillMissing.push(g);
+    }
+    const roomDates = stillMissing.map((g) => g.operatingDateIso);
     if (roomDates.length) {
       failures.push({
         blockingCondition: "UNPOSTED_ROOM_CHARGE_AT_S8_EXIT",
-        message: `Stay night(s) with COMPLETE night audit but no ROOM_CHARGE folio line: ${roomDates.join(", ")}`,
+        message: missingRoomChargeWords(roomDates),
       });
     }
   }

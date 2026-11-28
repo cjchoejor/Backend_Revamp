@@ -55,7 +55,7 @@ import { enforceFolioOutstandingForWriteOff } from "../../policies/13-billing-mo
 import { shouldCreateCommissionDueRecord } from "../../policies/28-commission-production/p68-commission-due-record-creation.js";
 import { computeGuestDataRetentionDueAt } from "../../policies/07-guest-data-governance/p18-guest-data-retention.js";
 import { enforceNoShowFinancialAmountsNonNegative } from "../../policies/22-no-show/p57-no-show-folio-financial.js";
-import { hotelTodayUtc } from "../../lib/stay-dates.js";
+import { effectiveCheckOutDate, hotelTodayUtc } from "../../lib/stay-dates.js";
 import { latestDispatchedInForce, retireSupersededReplyWaitsBestEffort } from "../../lib/reply-waits.js";
 import { replySettled } from "../../lib/guest-reply-settings.js";
 
@@ -479,7 +479,8 @@ async function sendInvoiceEmailBestEffort(
   // Prefer the frozen reservation dates + rate (authoritative from S4); fall back to the accepted
   // quotation (S3 PI scenario — no reservation yet); final fallback is the entry / invoice totals.
   const ci = entry.reservation?.frozenCheckInDate ?? entry.checkInDate ?? new Date();
-  const co = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate ?? new Date(ci.getTime() + 86400_000);
+  // The day the guest left when they left early (2026-11-28), else the booked check-out.
+  const co = effectiveCheckOutDate(entry) ?? new Date(ci.getTime() + 86400_000);
   const nights = Math.max(1, Math.round((co.getTime() - ci.getTime()) / 86400_000));
 
   const quotationTerms = (entry.quotations[0]?.commercialTerms as any) ?? null;
