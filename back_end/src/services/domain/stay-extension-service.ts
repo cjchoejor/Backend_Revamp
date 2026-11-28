@@ -732,6 +732,55 @@ export async function withdrawStayExtension(prisma: PrismaClient, actor: Actor, 
   return updated;
 }
 
+/**
+ * The booking left Stay without the extension being made (2026-11-28, the hotel's ENT-20261121-0006:
+ * an extension to 29 Nov was billed, then the guest checked out on 28 Nov, and the unfinished
+ * extension held Room 6031 on the chart). An extension is made only at Stay, so once the booking
+ * goes on to Check-out every request still open is closed: its nights let go, its bill and its
+ * reminder closed. Money already paid for it stays on the bill, as when the desk takes one back.
+ */
+export async function closeOpenExtensionsOnLeavingStay(prisma: PrismaClient, entryId: string, actorId: string) {
+  const open = await prisma.stayExtensionRequest.findMany({
+    where: { entryId, state: { in: ["REQUESTED", "BILLED", "PAID"] } },
+    include: { entry: { select: { inquiryId: true } } },
+  });
+  const now = new Date();
+  for (const req of open) {
+    await prisma.$transaction(async (tx) => {
+      await tx.stayExtensionRequest.update({
+        where: { id: req.id },
+        data: { state: "WITHDRAWN", closedAt: now, closedReason: "LEFT_STAY_NOT_EXTENDED" },
+      });
+      await closeInterimForExtensionTx(tx, req.id, "WITHDRAWN", "LEFT_STAY_NOT_EXTENDED");
+      await tx.traceEvent.create({
+        data: {
+          eventType: "STAY_EXTENSION.WITHDRAWN",
+          actorId,
+          actorLevel: "L1",
+          entityType: "StayExtensionRequest",
+          entityId: req.id,
+          operation: "UPDATE",
+          timestamp: now,
+          stageContext: Stage.S8,
+          inquiryId: req.entry.inquiryId,
+          entryId: req.entryId,
+          payload: {
+            entryId: req.entryId,
+            priorState: req.state,
+            cause: "LEFT_STAY",
+            reason: "The booking went on to Check-out — the stay was not extended",
+            moneyStaysOnFolio: req.state === "PAID",
+          } as Prisma.InputJsonValue,
+          createdBy: actorId,
+        },
+      });
+    });
+    await cancelHoldTimer(prisma, req.entryId, actorId, "LEFT_STAY_NOT_EXTENDED");
+    await cancelInterimReminderForExtension(prisma, req.id, actorId, "LEFT_STAY_NOT_EXTENDED").catch(() => {});
+  }
+  return open.length;
+}
+
 /** W40: the hold ran out unpaid — release the nights, close the bill. */
 export async function lapseStayExtensionRequest(prisma: PrismaClient, requestId: string, reason: string) {
   const req = await prisma.stayExtensionRequest.findUnique({ where: { id: requestId }, include: { entry: { select: { inquiryId: true } } } });

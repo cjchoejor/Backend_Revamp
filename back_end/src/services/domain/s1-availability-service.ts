@@ -12,6 +12,7 @@ import { resolveRatePackageForBooking } from "../../lib/rate-package-resolution.
 import {
   committedHoldSpans,
   pendingStayExtensionClaims,
+  guestsStillInClaims,
   reservedEntryRoomsSelect,
   reservedEntrySpans,
   stillHoldsInventory,
@@ -354,8 +355,21 @@ export async function runAvailabilityEngineForEntry(
     entryReferenceNumber: x.entry?.inquiryId ?? null,
     ...contextFromEntry(x.entry as Parameters<typeof contextFromEntry>[0]),
   }));
+  // A guest still in after their check-out day keeps the room tonight (2026-11-28) — the same
+  // rule the conflict check reads (lib/entry-inventory-claim.ts).
+  const stillInSpans = (await guestsStillInClaims(prisma, { checkIn, checkOut, excludeEntryId: entry.id })).map((x) => ({
+    roomId: x.roomId,
+    startDate: x.startDate,
+    endDate: x.endDate,
+    source: "RESERVED" as const,
+    paymentPending: false,
+    entryId: x.entryId,
+    entryReferenceNumber: x.entry?.inquiryId ?? null,
+    ...contextFromEntry(x.entry as Parameters<typeof contextFromEntry>[0]),
+  }));
   const roomBlockages = [
     ...reservedBlockages,
+    ...stillInSpans,
     ...committedSpans,
     ...extensionSpans,
     ...moveSpans,

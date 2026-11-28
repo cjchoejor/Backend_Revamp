@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   committedHoldSpans,
   pendingStayExtensionClaims,
+  guestsStillInClaims,
   reservedEntryRoomsSelect,
   reservedEntrySpans,
   stillHoldsInventory,
@@ -273,6 +274,20 @@ export async function findRoomBookingConflicts(
       guestName: guestNameOf(x.entry.guestProfile),
       startDate: x.startDate,
       endDate: x.endDate,
+    });
+  }
+
+  // A guest still in after their check-out day keeps the room tonight (2026-11-28).
+  for (const g of await guestsStillInClaims(db, { checkIn: input.checkIn, checkOut: input.checkOut, excludeEntryId: input.excludeEntryId })) {
+    if (!roomIdSet.has(g.roomId)) continue;
+    conflicts.push({
+      roomId: g.roomId,
+      source: "RESERVED",
+      entryId: g.entryId,
+      entryReferenceNumber: g.entry.inquiryId ?? null,
+      guestName: guestNameOf(g.entry.guestProfile),
+      startDate: g.startDate,
+      endDate: g.endDate,
     });
   }
 

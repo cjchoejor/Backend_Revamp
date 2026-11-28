@@ -633,5 +633,13 @@ export async function progressStageS7ToS8(prisma: PrismaClient, entryId: string,
     // best-effort dwell timer cleanup
   }
 
+  // An extension still open was never made (2026-11-28): it lets its nights go now.
+  try {
+    const { closeOpenExtensionsOnLeavingStay } = await import("../services/domain/stay-extension-service.js");
+    await closeOpenExtensionsOnLeavingStay(prisma, entryId, _actorId ?? "SYSTEM");
+  } catch (err) {
+    console.error("[S7→S8] closing open stay extensions failed", err);
+  }
+
   return loadEntryDetail(prisma, entryId);
 }

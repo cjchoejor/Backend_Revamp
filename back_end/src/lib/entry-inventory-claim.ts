@@ -19,6 +19,7 @@
  *    CANCELLED entry kept blocking its rooms for its old dates.
  */
 import { EntryStatus, Stage, type Prisma, type PrismaClient } from "@prisma/client";
+import { hotelTodayUtc } from "./stay-dates.js";
 
 /**
  * Statuses whose bookings have let go of their rooms.
@@ -381,6 +382,67 @@ function perNightClaimForStay(
  * from under a guest who is paying for it. The requesting entry itself is excluded — its own
  * commit re-validates against everyone else.
  */
+/**
+ * A guest still in after their check-out day keeps the room tonight (2026-11-28). The dates alone
+ * said the room was free from the morning the stay ended, so the stay extension moved another
+ * booking's guests into Room 602 while TEST-ED-COR2's guest, due out on 26 Nov, was still in it.
+ * The house chart already drew such a room ("due out · still in"); the searches and every hold and
+ * move now read it the same way.
+ *
+ * A booking at Stay or Check-out whose last night has passed — check-out before the hotel's today,
+ * not on it: a guest due out today leaves today and the room turns over — and whose room, held to
+ * the end of the stay, still reads OCCUPIED, claims that room for tonight. Only tonight: they are
+ * expected to go, and the desk checks them out or extends the stay.
+ */
+export async function guestsStillInClaims(
+  db: PrismaClient | Prisma.TransactionClient,
+  input: { checkIn: Date; checkOut: Date; excludeEntryId?: string | null },
+): Promise<
+  Array<
+    ClaimSpan & {
+      entryId: string;
+      entry: { inquiryId: string | null; guestProfile: { title?: string | null; firstName: string | null; lastName: string | null } | null };
+    }
+  >
+> {
+  const today = hotelTodayUtc();
+  const tomorrow = new Date(today.getTime() + 86_400_000);
+  if (!(input.checkIn.getTime() < tomorrow.getTime() && input.checkOut.getTime() > today.getTime())) return [];
+  const rows = await db.entry.findMany({
+    where: {
+      ...(input.excludeEntryId ? { NOT: { id: input.excludeEntryId } } : {}),
+      currentStage: { in: [Stage.S7, Stage.S8] },
+      status: EntryStatus.ACTIVE,
+      checkOutDate: { lt: today },
+      roomAssignments: { some: { room: { currentClaimState: "OCCUPIED" } } },
+    },
+    select: {
+      id: true,
+      inquiryId: true,
+      checkOutDate: true,
+      actualCheckOutDate: true,
+      guestProfile: { select: { title: true, firstName: true, lastName: true } },
+      roomAssignments: { select: { roomId: true, endDate: true, room: { select: { currentClaimState: true } } } },
+    },
+  });
+  const out: Array<ClaimSpan & { entryId: string; entry: { inquiryId: string | null; guestProfile: { title?: string | null; firstName: string | null; lastName: string | null } | null } }> = [];
+  for (const e of rows) {
+    if (!e.checkOutDate) continue;
+    const due = reservedClaimEndDate(e.checkOutDate, e);
+    if (due.getTime() >= today.getTime()) continue;
+    // Only a room the guest is in at the end of the stay — one left mid-stay reads OCCUPIED for whoever is in it now.
+    const rooms = new Set(
+      e.roomAssignments
+        .filter((a) => a.room?.currentClaimState === "OCCUPIED" && (a.endDate == null || a.endDate.getTime() >= due.getTime()))
+        .map((a) => a.roomId),
+    );
+    for (const roomId of rooms) {
+      out.push({ roomId, startDate: today, endDate: tomorrow, entryId: e.id, entry: { inquiryId: e.inquiryId, guestProfile: e.guestProfile } });
+    }
+  }
+  return out;
+}
+
 export async function pendingStayExtensionClaims(
   db: PrismaClient | Prisma.TransactionClient,
   input: { checkIn: Date; checkOut: Date; excludeEntryId?: string | null },
@@ -401,7 +463,10 @@ export async function pendingStayExtensionClaims(
       OR: [{ state: { in: ["REQUESTED", "BILLED"] }, holdExpiresAt: { gt: now } }, { state: "PAID" }],
       priorCheckOutDate: { lt: input.checkOut },
       newCheckOutDate: { gt: input.checkIn },
-      entry: { ...stillHoldsInventory },
+      // An extension is made only at Stay (2026-11-28, the hotel's ENT-20261121-0006): once the
+      // booking has gone on to Check-out or Closed it was never made, and its nights hold nothing.
+      // That one held Room 6031 on the chart and stopped every move and swap across it.
+      entry: { ...stillHoldsInventory, currentStage: "S7" },
     },
     select: {
       id: true,

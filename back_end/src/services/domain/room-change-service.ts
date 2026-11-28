@@ -471,12 +471,17 @@ async function loadRoomChangeContext(
         .filter((n) => n.roomIds.includes(fromRoomId))
         .map((n) => n.date)
         .filter((date) => (stage === Stage.S7 ? date >= todayIso : true));
-  if (substitutionNights.length === 0) {
-    throw new ValidationError("There are no remaining nights on that room to change — the stay is past them");
-  }
-
   const fromRoom = await prisma.room.findUnique({ where: { id: fromRoomId }, include: { roomType: true } });
   if (!fromRoom) throw new NotFoundError("Room");
+  if (substitutionNights.length === 0) {
+    // In house on the last morning there is no night left to move (2026-11-28, the hotel's
+    // ENT-20261122-0003: the box only said "the house could not be asked").
+    throw new ValidationError(
+      stage === Stage.S7 || stage === Stage.S8
+        ? `The guest's nights in Room ${fromRoom.roomNumber} are over — there is no night left to move it for. To keep them on, extend the stay (Change booking › Extend the stay); it moves guests out of rooms that are taken.`
+        : `Room ${fromRoom.roomNumber} has no night left in this stay to change`,
+    );
+  }
 
   return {
     entry, stage, checkIn, checkOut, currentCheckOut, nightsIso, sealedConfig, picture, currentPlanRoomIds, claimedRoomIds,
