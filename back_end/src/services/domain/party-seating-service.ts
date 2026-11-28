@@ -4,6 +4,7 @@ import { NotFoundError, ValidationError } from "../../lib/errors.js";
 import {
   assessPartySeating,
   currentPerNightPicture,
+  limitPictureToRowsHeld,
   derivePartySlots,
   repairPartySeating,
   apartmentGroupsFromTerms,
@@ -15,6 +16,7 @@ import {
   type SeatingRow,
 } from "../../lib/party-seating.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
+import { roomsLeftOf } from "../../lib/plan-room-left.js";
 import { changeRoomToNewSegment, type RoomChangeOutcome } from "./room-change-service.js";
 import { hotelCalendarYmd } from "../../lib/stay-dates.js";
 
@@ -81,7 +83,7 @@ async function loadSeatingEntry(prisma: PrismaClient, entryId: string) {
       reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } },
       reservations: { orderBy: { confirmedAt: "desc" }, select: { confirmedAt: true, frozenCommercialTerms: true } },
       committedHold: { select: { roomId: true, perNightBreakdown: true } },
-      roomAssignments: { orderBy: { createdAt: "desc" }, select: { roomId: true } },
+      roomAssignments: { orderBy: { createdAt: "desc" }, select: { roomId: true, startDate: true, endDate: true } },
       availabilityConfigs: {
         where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
         orderBy: { sealedAt: "asc" },
@@ -127,18 +129,24 @@ export async function buildPartySeatingStatus(prisma: PrismaClient, entryId: str
   const checkOut = entry.reservation?.frozenCheckOutDate ?? entry.checkOutDate;
   const nightsIso = checkIn && checkOut ? isoNightsBetween(checkIn, checkOut) : [];
   const latestSealed = entry.availabilityConfigs[entry.availabilityConfigs.length - 1] ?? null;
-  const picture = currentPerNightPicture({
+  const sealedPicture = currentPerNightPicture({
     sealedOption: latestSealed?.optionSelected ?? null,
     fallbackRoomIds: Array.from(new Set([...heldRooms(entry.committedHold), ...entry.roomAssignments.map((a) => a.roomId)])),
     nightsIso: nightsIso.length > 0 ? nightsIso : ["stay"],
   });
+  // In house the rows are what the guest holds (2026-11-28), and a room that left took its guests.
+  const inHouse = entry.currentStage === Stage.S7 || entry.currentStage === Stage.S8;
+  const picture = inHouse ? limitPictureToRowsHeld(sealedPicture, entry.roomAssignments) : sealedPicture;
+  const left = await roomsLeftOf(prisma, entry.id);
   const planRoomIds = Array.from(new Set(picture.flatMap((n) => n.roomIds)));
 
   const rows = basis.compositions ?? [];
-  const strayRooms = rows.map((r) => r.roomId).filter((id) => !planRoomIds.includes(id));
+  // A row of a room that left the stay is history, not a guest without a room (2026-11-28).
+  const leftIds = new Set(left.map((l) => l.roomId));
+  const strayRooms = rows.map((r) => r.roomId).filter((id) => !planRoomIds.includes(id) && !leftIds.has(id));
   // An apartment's rooms are let together (2026-11-25): one may stand empty while another holds the guests.
   const apartmentGroups = apartmentGroupsFromTerms(entry.reservation?.frozenCommercialTerms, ...entry.quotations.map((q) => q.commercialTerms));
-  const assessment = assessPartySeating({ slots, rows, picture, apartmentGroups });
+  const assessment = assessPartySeating({ slots, rows, picture, apartmentGroups, left });
 
   const roomRows = await prisma.room.findMany({
     where: { id: { in: Array.from(new Set([...planRoomIds, ...strayRooms])) } },
@@ -160,8 +168,8 @@ export async function buildPartySeatingStatus(prisma: PrismaClient, entryId: str
   } else if (ok) repairBlockedReason = "Every guest already has a room and no room is empty";
   else {
     const successorOf = successorChainFromConfigs(entry.availabilityConfigs);
-    const repointed = repointStrayRows(rows, planRoomIds, successorOf);
-    const dry = repairPartySeating({ slots, rows: repointed.rows, picture, apartmentGroups });
+    const repointed = repointStrayRows(rows, planRoomIds, successorOf, leftIds);
+    const dry = repairPartySeating({ slots, rows: repointed.rows, picture, apartmentGroups, left });
     const touched = new Set<string>([
       ...repointed.actions.flatMap((a) => (a.type === "ROW_REPOINTED" ? [a.toRoomId] : [])),
       ...dry.actions.flatMap((a) => ("roomId" in a ? [a.roomId] : [])),

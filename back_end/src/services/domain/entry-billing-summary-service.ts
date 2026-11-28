@@ -252,7 +252,7 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
       },
       roomDepartures: {
         orderBy: { recordedAt: "asc" },
-        select: { roomNumber: true, departureDate: true, unstayedNights: true, forgoneTotal: true, feeAmount: true, feeWaived: true, state: true },
+        select: { roomId: true, roomNumber: true, departureDate: true, unstayedNights: true, forgoneTotal: true, frozenTotalBefore: true, feeAmount: true, feeWaived: true, state: true },
       },
     },
   });
@@ -685,7 +685,27 @@ export async function buildEntryBillingSummary(prisma: Db, entryId: string): Pro
     state: d.state,
   }));
   if (stayTotalDec != null && roomsLeaving.length) {
-    const less = (entry.roomDepartures ?? []).reduce((t, d) => t.plus(toDecimal(d.forgoneTotal)), new Prisma.Decimal(0));
+    // Only what the priced stay still charges for the room comes off (2026-11-28). A quotation made
+    // before the room left prices its unslept nights, so they come off here; one made after —
+    // a room change or an extension walks a new pass, which prices the room for the nights it was
+    // held — already leaves them out, and taking them off again would read the stay short. The
+    // room's money in the priced stay, less what it keeps for its nights slept, is what comes off,
+    // never more than the record's own figure. A priced stay with no per-room figures (the old flat
+    // quote) takes off the record's figure, as before.
+    const quotedByRoom = new Map<string, Prisma.Decimal>();
+    for (const r of perRoomBlob ?? []) {
+      if (typeof r.roomId === "string" && r.total != null) quotedByRoom.set(r.roomId, (quotedByRoom.get(r.roomId) ?? new Prisma.Decimal(0)).plus(toDecimal(r.total as never)));
+    }
+    const less = (entry.roomDepartures ?? []).reduce((t, d) => {
+      const forgone = toDecimal(d.forgoneTotal);
+      if (!perRoomBlob?.length) return t.plus(forgone);
+      const quoted = quotedByRoom.get(d.roomId);
+      if (quoted == null) return t;
+      if (d.frozenTotalBefore == null) return t.plus(forgone);
+      const kept = toDecimal(d.frozenTotalBefore).minus(forgone);
+      const off = Prisma.Decimal.min(forgone, Prisma.Decimal.max(new Prisma.Decimal(0), quoted.minus(kept)));
+      return t.plus(off);
+    }, new Prisma.Decimal(0));
     const shortened = stayTotalDec.minus(less);
     stayTotalDec = shortened.lessThan(0) ? new Prisma.Decimal(0) : shortened;
   }

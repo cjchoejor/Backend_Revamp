@@ -9,6 +9,8 @@ import { getTimerEngine } from "../infrastructure/timer-management-service.js";
 import { resetRoomBedToUsualTx } from "./room-bed-type-service.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { resolveChargeRates } from "../infrastructure/compute-stay-charges.js";
+import { allocateReadableId } from "../../lib/readable-id.js";
+import { takeRoomOffPlanTx } from "../../lib/plan-room-left.js";
 
 /**
  * ONE room of a multi-room booking leaves while the rest of the party stays (2026-09-09,
@@ -258,6 +260,40 @@ export async function departRoomEarly(
           ...(newFrozenTotal != null ? { frozenTotal: newFrozenTotal } : {}),
         },
       });
+      // The same record a room leaving early writes (2026-11-28): the price takes off the nights
+      // it gives up, the seating knows its guests left with it, and the room leaves the booking's
+      // plan, or an extension or a room change would copy it back.
+      const now = new Date();
+      await tx.roomDepartureRecord.create({
+        data: {
+          id: await allocateReadableId(tx, "EARLY_DEPARTURE" as const, now),
+          entryId: entry.id,
+          roomId: room.id,
+          roomNumber: room.roomNumber,
+          assignmentId: live.id,
+          departureDate: departure,
+          originalEndDate: rowEnd,
+          sleptNights,
+          unstayedNights,
+          forgoneSubtotal: forgoneSub,
+          forgoneTotal: forgoneTot,
+          frozenSubtotalBefore: live.frozenSubtotal ?? null,
+          frozenTotalBefore: live.frozenTotal ?? null,
+          feeBasis: { note: "Released with a payment — no early-departure fee" } as Prisma.InputJsonValue,
+          kind: "LEAVING",
+          feeAmount: new Prisma.Decimal(0),
+          feeWaived: false,
+          billing: "TOGETHER",
+          state: "LEFT",
+          leftAt: now,
+          leftBy: input.actorId,
+          reason: input.reason?.trim() || "Guest of this room left; the rest of the booking stays",
+          recordedAt: now,
+          recordedBy: input.actorId,
+          recordedByLevel: input.actorLevel,
+        },
+      });
+      await takeRoomOffPlanTx(tx, entry.id, room.id, ymdUtc(departure));
     }
 
     await releaseRoomFromStayTx(tx, {

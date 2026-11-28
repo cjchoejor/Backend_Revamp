@@ -11,6 +11,7 @@ import {
   derivePartySlots,
   describeSeatingRepair,
   apartmentGroupsFromTerms,
+  limitPictureToRowsHeld,
   repairPartySeating,
   repointStrayRows,
   resolveCompositionBasis,
@@ -19,6 +20,7 @@ import {
   type SeatingRepairAction,
 } from "../../lib/party-seating.js";
 import { loadChildPolicyBundle } from "./child-policy-service.js";
+import { roomsLeftOf } from "../../lib/plan-room-left.js";
 import { findRoomBookingConflicts, type RoomBookingConflict } from "../../lib/room-booking-conflicts.js";
 import { resolveOperativeQuotation } from "../../lib/operative-quotation.js";
 import { allocateReadableId } from "../../lib/readable-id.js";
@@ -434,11 +436,15 @@ async function loadRoomChangeContext(
       ...entry.roomAssignments.map((a) => a.roomId),
     ]),
   );
-  const basePicture = currentPerNightPicture({
+  const sealedPicture = currentPerNightPicture({
     sealedOption: sealedConfig?.optionSelected ?? null,
     fallbackRoomIds,
     nightsIso: extension ? isoNightsBetween(checkIn, currentCheckOut!) : dateShift ? isoNightsBetween(priorCheckIn!, currentCheckOut!) : nightsIso,
   });
+  // In house the rows are what the guest holds (2026-11-28): a room that left the stay is not
+  // copied onto the new plan's later nights, guests and all.
+  const basePicture =
+    stage === Stage.S7 || stage === Stage.S8 ? limitPictureToRowsHeld(sealedPicture, entry.roomAssignments) : sealedPicture;
   // A date move carries the room pattern night for night onto the new nights.
   // A shortened stay keeps its own nights, as they are.
   const shiftedPicture = keep
@@ -1836,6 +1842,9 @@ async function changeRoomToNewSegmentInner(
 
   // The room-change chain — every sealed config's from→to marker, plus THIS change's — so a
   // composition row left on a replaced room can follow it to the room it became.
+  // A room that left the stay took its guests with it (2026-11-28): its row is never handed on,
+  // and its guests are not seated again.
+  const roomsLeft = await roomsLeftOf(prisma, input.entryId);
   const successorOf = successorChainFromConfigs(
     await prisma.availabilityConfiguration.findMany({
       where: { entryId: input.entryId, sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
@@ -1990,7 +1999,7 @@ async function changeRoomToNewSegmentInner(
     // else paired positionally with a plan room that lacks one (its guest data most likely
     // belongs there — the stray is the pre-drift identity); anything still stray is dropped.
     // No-op when the compositions already match the plan, which is every normal case.
-    const repointed = repointStrayRows(newCompositions, substitutedDistinct, successorOf);
+    const repointed = repointStrayRows(newCompositions, substitutedDistinct, successorOf, new Set(roomsLeft.map((l) => l.roomId)));
     newCompositions = repointed.rows;
     seatingActions.push(...repointed.actions);
 
@@ -2063,6 +2072,8 @@ async function changeRoomToNewSegmentInner(
       facts: seatingFacts,
       // An apartment's rooms are let together (2026-11-25): one may stand empty, and no extra bed is added there.
       apartmentGroups: apartmentGroupsFromTerms(priorTerms),
+      // A room that left took its guests with it (2026-11-28) — they are not seated again.
+      left: roomsLeft,
     });
     const actions = [...seatingActions, ...repair.actions];
     const lines = describeSeatingRepair(
@@ -2096,7 +2107,7 @@ async function changeRoomToNewSegmentInner(
     // known composition, which can predate an earlier change) is the same row — follow the
     // room-change chain to the room it became before judging the cover. Rows that resolve to
     // nothing stay as they are, so the cover check below names them.
-    const suppliedRepoint = repointStrayRows(tableIn, substitutedDistinct, successorOf);
+    const suppliedRepoint = repointStrayRows(tableIn, substitutedDistinct, successorOf, new Set(roomsLeft.map((l) => l.roomId)));
     seatingActions.push(...suppliedRepoint.actions.filter((a) => a.type !== "ROW_DROPPED"));
     let supplied: RoomCompositionServiceInput[] = [
       ...suppliedRepoint.rows,

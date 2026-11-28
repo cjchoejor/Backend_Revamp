@@ -735,6 +735,96 @@ async function main() {
     }
   }
 
+  // A21 / A22 (2026-11-28, TEST-ED-LE4-ENT): a room that left the stay (taken off, or leaving early,
+  // the rest staying) must leave the booking's plan with its guests. When it did not, the stay
+  // extension read the room as still the guests' and moved its guests — who had gone — into two
+  // new rooms, priced for three more nights.
+  //   A21 (WARN): in house, the plan (the newest sealed pick) names a room on a night none of the
+  //       booking's rows hold — the next change would copy it back.
+  //   A22 (CRITICAL): on a night of the stay, the rooms the booking holds carry more guests than
+  //       the party less the guests of rooms that left — guests charged for who are not there.
+  {
+    const inHouse = await prisma.entry.findMany({
+      where: { status: "ACTIVE", currentStage: { in: ["S7", "S8"] } },
+      select: {
+        id: true,
+        adultCount: true,
+        childAges: true,
+        guestCount: true,
+        checkInDate: true,
+        checkOutDate: true,
+        actualCheckOutDate: true,
+        reservation: { select: { frozenCheckInDate: true, frozenCheckOutDate: true, frozenCommercialTerms: true } },
+        roomAssignments: { select: { roomId: true, startDate: true, endDate: true, room: { select: { roomNumber: true } } } },
+        roomDepartures: { where: { state: { in: ["LEFT", "SCHEDULED"] } }, select: { roomId: true, roomNumber: true, departureDate: true, feeBasis: true } },
+        availabilityConfigs: {
+          where: { sealedAt: { not: null }, optionSelected: { not: Prisma.DbNull } },
+          orderBy: { sealedAt: "desc" },
+          take: 1,
+          select: { optionSelected: true },
+        },
+      },
+    });
+    for (const e of inHouse) {
+      const ci = e.reservation?.frozenCheckInDate ?? e.checkInDate;
+      const co = e.actualCheckOutDate ?? e.reservation?.frozenCheckOutDate ?? e.checkOutDate;
+      if (!ci || !co || !e.roomAssignments.length) continue;
+      const nights: string[] = [];
+      for (let t = ci.getTime(); t < co.getTime() && nights.length < 400; t += 86_400_000) nights.push(ymd(new Date(t)));
+      const holds = (roomId: string, night: string) => {
+        const t = Date.parse(`${night}T00:00:00.000Z`);
+        return e.roomAssignments.some((a) => a.roomId === roomId && (a.startDate == null || a.endDate == null || (a.startDate.getTime() <= t && t < a.endDate.getTime())));
+      };
+      const numberOf = (roomId: string) => e.roomAssignments.find((a) => a.roomId === roomId)?.room.roomNumber ?? roomId.slice(0, 6);
+
+      const opt = e.availabilityConfigs[0]?.optionSelected as { perNight?: Array<{ date?: string; roomIds?: unknown[] }> } | null | undefined;
+      if (Array.isArray(opt?.perNight)) {
+        const stray: string[] = [];
+        for (const n of opt!.perNight!) {
+          const night = String(n.date ?? "").slice(0, 10);
+          if (!nights.includes(night)) continue;
+          for (const r of n.roomIds ?? []) {
+            const id = typeof r === "string" ? r : (r as { roomId?: string })?.roomId;
+            if (id && !holds(id, night)) stray.push(`Room ${numberOf(id)} on ${night}`);
+          }
+        }
+        if (stray.length) add("WARN", "A21_PLAN_NOT_ROOMS_HELD", e.id, `the plan names ${stray.slice(0, 4).join(", ")}${stray.length > 4 ? ` and ${stray.length - 4} more` : ""}, which the booking does not hold`);
+      }
+
+      const comps = ((e.reservation?.frozenCommercialTerms as { roomCompositions?: unknown } | null)?.roomCompositions ?? null) as Array<{
+        roomId?: string;
+        adultCount?: number;
+        cnb6To10Count?: number;
+        cnbUnder6Count?: number;
+      }> | null;
+      if (!Array.isArray(comps) || !comps.length) continue;
+      const guestsIn = (roomId: string) => {
+        const c = comps.find((x) => x.roomId === roomId);
+        return c ? (c.adultCount ?? 0) + (c.cnb6To10Count ?? 0) + (c.cnbUnder6Count ?? 0) : 0;
+      };
+      const party = (e.adultCount ?? 0) + (e.childAges?.length ?? 0) || (e.guestCount ?? 0);
+      for (const night of nights) {
+        const held = Array.from(new Set(e.roomAssignments.filter((a) => holds(a.roomId, night)).map((a) => a.roomId)));
+        const gone = e.roomDepartures
+          .filter((d) => ymd(d.departureDate) <= night && (d.feeBasis as { guestsOfItsOwn?: unknown } | null)?.guestsOfItsOwn !== false)
+          .reduce((t, d) => t + guestsIn(d.roomId), 0);
+        const inRooms = held.reduce((t, id) => t + guestsIn(id), 0);
+        if (inRooms > party - gone) {
+          add(
+            "CRITICAL",
+            "A22_GUESTS_CAME_BACK",
+            e.id,
+            `on ${night} Rooms ${held.map(numberOf).join(", ")} hold ${inRooms} guests; the booking has ${party - gone} once ${e.roomDepartures
+              .filter((d) => ymd(d.departureDate) <= night)
+              .map((d) => `Room ${d.roomNumber}`)
+              .join(" and ") || "nobody"} left`,
+          );
+          break;
+        }
+      }
+    }
+  }
+
   const bySeverity: Record<Severity, Finding[]> = { CRITICAL: [], WARN: [], INFO: [] };
   for (const f of findings) bySeverity[f.severity].push(f);
   console.log(`\n════ MONEY AUDIT — ${new Date().toISOString().slice(0, 16)} ════`);

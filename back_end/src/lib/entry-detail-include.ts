@@ -71,6 +71,13 @@ export const entryDetailInclude = {
   // Early departure (2026-08-22): the one record of a shortened stay - the desk prints its facts
   // on every step from Stay onward.
   earlyDeparture: true,
+  // Rooms that left the stay before its end, with their guests (2026-11-28) — the desk's table
+  // counts the party night by night without them.
+  roomDepartures: {
+    where: { state: { in: ["LEFT", "SCHEDULED"] } },
+    orderBy: { departureDate: "asc" as const },
+    select: { id: true, roomId: true, roomNumber: true, departureDate: true, state: true, kind: true, feeBasis: true },
+  },
   inquiry: {
     include: {
       agentProfile: { select: { id: true, displayName: true, commissionRate: true, commissionBasis: true } },

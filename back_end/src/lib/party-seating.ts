@@ -127,6 +127,32 @@ export function currentPerNightPicture(input: {
   return input.nightsIso.map((date) => ({ date, roomIds: [...rooms] }));
 }
 
+/**
+ * The plan of a booking in house, held to the rooms its assignment rows hold each night
+ * (2026-11-28). In house the rows are what the guest holds — the night audit bills them — while
+ * the sealed pick is the plan as last saved: a room that left the stay could still be on its later
+ * nights there, and a change that copied the pick (an extension, a room change) brought the room
+ * back with guests who had gone. A room stays on a night only when one of its rows covers it (a
+ * row with no dates covers the whole stay). A night the rows would leave empty keeps the plan's
+ * rooms rather than read as no room at all.
+ */
+export function limitPictureToRowsHeld(
+  picture: NightPicture,
+  rows: Array<{ roomId: string; startDate: Date | null; endDate: Date | null }>,
+): NightPicture {
+  if (!rows.length) return picture;
+  const covers = (roomId: string, date: string) => {
+    const t = Date.parse(`${date}T00:00:00.000Z`);
+    return rows.some(
+      (r) => r.roomId === roomId && (r.startDate == null || r.endDate == null || (r.startDate.getTime() <= t && t < r.endDate.getTime())),
+    );
+  };
+  return picture.map((n) => {
+    const kept = n.roomIds.filter((id) => covers(id, n.date));
+    return { date: n.date, roomIds: kept.length ? kept : [...n.roomIds] };
+  });
+}
+
 /** Distinct plan rooms in first-appearance order — the seating order. */
 export function planRoomOrder(picture: NightPicture): string[] {
   const out: string[] = [];
@@ -314,11 +340,14 @@ export function repointStrayRows<T extends SeatingRow>(
   rows: T[],
   planRoomIds: string[],
   successorOf: Map<string, string[]>,
+  /** Rooms that left the stay with their guests (2026-11-28): their rows are dropped, never handed to another room. */
+  leftRoomIds?: Set<string>,
 ): { rows: T[]; actions: SeatingRepairAction[] } {
   const planSet = new Set(planRoomIds);
   const actions: SeatingRepairAction[] = [];
   const kept: T[] = rows.filter((r) => planSet.has(r.roomId)).map(cloneRow);
-  const strays = rows.filter((r) => !planSet.has(r.roomId));
+  const strays = rows.filter((r) => !planSet.has(r.roomId) && !leftRoomIds?.has(r.roomId));
+  for (const r of rows) if (!planSet.has(r.roomId) && leftRoomIds?.has(r.roomId)) actions.push({ type: "ROW_DROPPED", roomId: r.roomId });
   const has = (id: string) => kept.some((r) => r.roomId === id);
   const leftovers: T[] = [];
   for (const stray of strays) {
@@ -427,12 +456,40 @@ export function apartmentGroupsFromTerms(...termsList: unknown[]): string[][] {
   return [];
 }
 
+/**
+ * A room that left the stay before the booking's end, with its guests (2026-11-28): a room taken
+ * off ("the hotel's mistake") or leaving early, the rest staying — `RoomDepartureRecord`. From
+ * `fromDate` on, its guests are no longer the booking's to seat: the party on those nights is
+ * smaller by them. Without this, a plan that no longer names the room reads its guests as
+ * unseated, and the repair would put them in the rooms still in use, an extra bed with them.
+ */
+export type RoomLeft = { roomId: string; fromDate: string };
+
+/** The party on a night: everyone, less the guests of rooms that left by then (their own rows' counts). */
+export function partyOnNight(
+  party: Record<PartyBand, number>,
+  date: string,
+  rowFor: (id: string) => SeatingRow | undefined,
+  left: RoomLeft[] | undefined,
+): Record<PartyBand, number> {
+  if (!left?.length) return party;
+  const out: Record<PartyBand, number> = { ...party };
+  for (const l of left) {
+    if (l.fromDate > date) continue;
+    const row = rowFor(l.roomId);
+    for (const band of BANDS) out[band] = Math.max(0, out[band] - rowCount(row, band));
+  }
+  return out;
+}
+
 export function assessPartySeating(input: {
   slots: PartySlot[];
   rows: SeatingRow[];
   picture: NightPicture;
   /** Rooms let together as one apartment: one of them may stand empty while another holds the guests. */
   apartmentGroups?: string[][];
+  /** Rooms that left the stay, with their guests (2026-11-28). */
+  left?: RoomLeft[];
 }): PartySeatingAssessment {
   const picture = [...input.picture].sort((a, b) => a.date.localeCompare(b.date));
   const order = planRoomOrder(picture);
@@ -452,10 +509,11 @@ export function assessPartySeating(input: {
   const perNight = picture.map((n) => {
     const shortfall: Record<PartyBand, number> = { ADULT: 0, C6TO10: 0, UNDER6: 0 };
     const overflow: Record<PartyBand, number> = { ADULT: 0, C6TO10: 0, UNDER6: 0 };
+    const tonight = partyOnNight(party, n.date, rowFor, input.left);
     for (const band of BANDS) {
       const sum = n.roomIds.reduce((acc, id) => acc + rowCount(rowFor(id), band), 0);
-      shortfall[band] = Math.max(0, party[band] - sum);
-      overflow[band] = Math.max(0, sum - party[band]);
+      shortfall[band] = Math.max(0, tonight[band] - sum);
+      overflow[band] = Math.max(0, sum - tonight[band]);
     }
     return { date: n.date, roomIds: [...n.roomIds], shortfall, overflow };
   });
@@ -506,12 +564,14 @@ export function repairPartySeating<T extends SeatingRow>(input: {
   mintRow?: (roomId: string) => T;
   /** Rooms let together as one apartment (2026-11-25) — no extra bed is added there. */
   apartmentGroups?: string[][];
+  /** Rooms that left the stay, with their guests (2026-11-28) — never re-seated. */
+  left?: RoomLeft[];
 }): PartySeatingRepair<T> {
   const picture = [...input.picture].sort((a, b) => a.date.localeCompare(b.date));
   const order = planRoomOrder(picture);
   const nightsByRoom = nightsByRoomFromPicture(picture);
   const party = partySize(input.slots);
-  const before = assessPartySeating({ slots: input.slots, rows: input.rows, picture, apartmentGroups: input.apartmentGroups });
+  const before = assessPartySeating({ slots: input.slots, rows: input.rows, picture, apartmentGroups: input.apartmentGroups, left: input.left });
   const actions: SeatingRepairAction[] = [];
   const unresolved: string[] = [];
   let rows: T[] = input.rows.map(cloneRow);
@@ -545,17 +605,20 @@ export function repairPartySeating<T extends SeatingRow>(input: {
   // 2. Everyone has a room on every night.
   const sumOn = (date: string, band: PartyBand) =>
     (picture.find((n) => n.date === date)?.roomIds ?? []).reduce((acc, id) => acc + rowCount(rowFor(id), band), 0);
+  // The party each night, less the guests of rooms that left by then (read off the rows as given).
+  const partyOn = (date: string, band: PartyBand) =>
+    partyOnNight(party, date, (id) => input.rows.find((r) => r.roomId === id), input.left)[band];
   const seated = new Map<string, number>(); // `${roomId}|${band}` → added
   for (const night of picture) {
     for (const band of BANDS) {
       let guard = 0;
-      while (party[band] - sumOn(night.date, band) > 0 && guard++ < 64) {
+      while (partyOn(night.date, band) - sumOn(night.date, band) > 0 && guard++ < 64) {
         const candidates = night.roomIds
           .filter((id) => rowFor(id))
           .filter((id) => {
             // Adding one guest here must leave no night of this room over the party.
             const nights = nightsByRoom.get(id) ?? [night.date];
-            if (!nights.every((d) => sumOn(d, band) + 1 <= party[band])) return false;
+            if (!nights.every((d) => sumOn(d, band) + 1 <= partyOn(d, band))) return false;
             if (band === "ADULT") {
               const cap = input.facts?.get(id)?.maxCapacity ?? null;
               if (cap != null && rowCount(rowFor(id), "ADULT") + 1 > cap) return false;
@@ -570,7 +633,7 @@ export function repairPartySeating<T extends SeatingRow>(input: {
           );
         const pick = candidates[0];
         if (!pick) {
-          const short = party[band] - sumOn(night.date, band);
+          const short = partyOn(night.date, band) - sumOn(night.date, band);
           unresolved.push(
             `${short} ${bandWord(band, short)} could not be seated on ${night.date} — no room in use that night has space for them`,
           );
@@ -605,7 +668,7 @@ export function repairPartySeating<T extends SeatingRow>(input: {
     rows = rows.map((r, i) => (bedded.autoAddedIndexes.includes(i) && touched.has(r.roomId) ? bedded.compositions[i] : r));
   }
 
-  const after = assessPartySeating({ slots: input.slots, rows, picture, apartmentGroups: input.apartmentGroups });
+  const after = assessPartySeating({ slots: input.slots, rows, picture, apartmentGroups: input.apartmentGroups, left: input.left });
   return { rows, actions, unresolved, changed: actions.length > 0, before, after };
 }
 

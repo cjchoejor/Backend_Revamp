@@ -12,6 +12,7 @@ import { computeEarlyDepartureFigures, recordEarlyDeparture, type EarlyDeparture
 import { postCharge } from "./s7-folio-lines-service.js";
 import { releaseRoomFromStayTx, scheduleCleaningAfterLeaving } from "./room-early-departure-service.js";
 import { returnRoomKey } from "./room-key-service.js";
+import { takeRoomOffPlanTx } from "../../lib/plan-room-left.js";
 
 /**
  * Leaving early — the whole booking, or some of its rooms (2026-11-26, operator: "in the change
@@ -140,7 +141,7 @@ export async function recordRoomsLeavingEarly(
   const ruleBasis = { rule: figures.fee.rule, serviceChargeRate: figures.fee.serviceChargeRate, gstRate: figures.fee.gstRate, explanation: figures.fee.explanation };
 
   const made = await prisma.$transaction(async (tx) => {
-    const out: Array<{ id: string; roomId: string; roomNumber: string; unstayed: number; forgoneTotal: number; fee: number; description: string }> = [];
+    const out: Array<{ id: string; roomId: string; roomNumber: string; unstayed: number; forgoneTotal: number; fee: number; description: string; planTrimmed: boolean }> = [];
     for (const [roomId, rows] of byRoom) {
       const roomNumber = rows[0].roomNumber ?? roomId.slice(0, 6);
       let forgoneSub = new Prisma.Decimal(0);
@@ -202,6 +203,9 @@ export async function recordRoomsLeavingEarly(
           recordedByLevel: actor.actorLevel,
         },
       });
+      // The room leaves the booking's plan from its first night not slept (2026-11-28) — or an
+      // extension or a room change copies it back, guests and all.
+      const plan = await takeRoomOffPlanTx(tx, entryId, roomId, figures.departureDate);
       if (!later) {
         await releaseRoomFromStayTx(tx, {
           roomId,
@@ -223,6 +227,7 @@ export async function recordRoomsLeavingEarly(
         forgoneTotal: Number(forgoneTot.toFixed(2)),
         fee: Number(feeAmount.toFixed(2)),
         description: `Early departure fee · Room ${roomNumber} · leaving ${nightsWord(unstayed)} early (from ${fmtDay(figures.departureDate)}; booked to ${booked})`,
+        planTrimmed: plan.pick || plan.hold,
       });
     }
     await tx.traceEvent.create({
@@ -241,7 +246,7 @@ export async function recordRoomsLeavingEarly(
           departureDate: figures.departureDate,
           later,
           billing: input.billing,
-          rooms: out.map((o) => ({ recordId: o.id, roomId: o.roomId, roomNumber: o.roomNumber, unstayedNights: o.unstayed, forgoneTotal: o.forgoneTotal, feeAmount: o.fee })),
+          rooms: out.map((o) => ({ recordId: o.id, roomId: o.roomId, roomNumber: o.roomNumber, unstayedNights: o.unstayed, forgoneTotal: o.forgoneTotal, feeAmount: o.fee, planTrimmed: o.planTrimmed })),
           feeWaived: waived,
           waiveReason: waived ? input.waiveReason!.trim() : null,
           feeBasis: figures.fee.rule.basis,

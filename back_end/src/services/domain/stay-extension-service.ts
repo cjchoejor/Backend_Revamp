@@ -3,7 +3,7 @@ import { Prisma, Stage } from "@prisma/client";
 import { NotFoundError, PolicyGateBlockedError, ValidationError } from "../../lib/errors.js";
 import { requireActiveConfigValue } from "../../lib/config-store.js";
 import { cancelEntryTimersByCode } from "../../lib/cancel-entry-timers-by-code.js";
-import { currentPerNightPicture, resolveCompositionBasis } from "../../lib/party-seating.js";
+import { currentPerNightPicture, limitPictureToRowsHeld, resolveCompositionBasis } from "../../lib/party-seating.js";
 import { enforceExtensionPaidBeforeCommit } from "../../policies/35-interim-payment/p80-interim-payment-gates.js";
 import {
   describeGuestOverlap,
@@ -253,11 +253,15 @@ export async function previewStayExtension(
 
   // The current plan and the rooms in use on the last night — those are what extend.
   const currentNights = nightsBetween(checkIn, currentCheckOut);
-  const picture = currentPerNightPicture({
-    sealedOption: entry.availabilityConfigs[0]?.optionSelected ?? null,
-    fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
-    nightsIso: currentNights,
-  });
+  // Held to the rooms' own rows (2026-11-28): a room that left the stay is not one that extends.
+  const picture = limitPictureToRowsHeld(
+    currentPerNightPicture({
+      sealedOption: entry.availabilityConfigs[0]?.optionSelected ?? null,
+      fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
+      nightsIso: currentNights,
+    }),
+    entry.roomAssignments,
+  );
   const lastNight = picture[picture.length - 1];
   const lastNightRoomIds = lastNight?.roomIds ?? [];
   if (lastNightRoomIds.length === 0) throw new ValidationError("This booking has no room on its last night to extend");
@@ -803,11 +807,14 @@ export async function commitStayExtension(
       `The booking's checkout (${isoDay(currentCheckOut)}) no longer matches the one this extension was requested against (${isoDay(req.priorCheckOutDate)}) — request it again`,
     );
   }
-  const picture = currentPerNightPicture({
-    sealedOption: entry.availabilityConfigs[0]?.optionSelected ?? null,
-    fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
-    nightsIso: nightsBetween(checkIn, currentCheckOut),
-  });
+  const picture = limitPictureToRowsHeld(
+    currentPerNightPicture({
+      sealedOption: entry.availabilityConfigs[0]?.optionSelected ?? null,
+      fallbackRoomIds: Array.from(new Set(entry.roomAssignments.map((a) => a.roomId))),
+      nightsIso: nightsBetween(checkIn, currentCheckOut),
+    }),
+    entry.roomAssignments,
+  );
   const lastNightRoomIds = picture[picture.length - 1]?.roomIds ?? [];
   const extraRoomIds = Array.from(new Set(extraNights.map((n) => n.roomId)));
   const newRoomIds = extraRoomIds.filter((id) => !lastNightRoomIds.includes(id));
