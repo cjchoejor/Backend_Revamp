@@ -982,6 +982,23 @@ function TakenRooms({
   const nightsWords = (nights: string[]) =>
     nights.length === 0 ? "" : nights.length === 1 ? fmtDay(nights[0]!) : `${fmtDay(nights[0]!)} – ${fmtDay(nights[nights.length - 1]!)}`;
   const stepWord = (stage: string) => STEP_NAMES[Number(stage.replace(/\D/g, "")) - 1] ?? stage;
+  // Whether a holder's guest is in the hotel yet: until Check-in their booking only holds the room.
+  const notArrived = (stage: string) => stage === "S3" || stage === "S4" || stage === "S5";
+  // A booking holding two or more of these rooms can be moved out of all of them at once (2026-11-28,
+  // the hotel's ENT-20261122-0003: one booking at Arrival held four of our guest's rooms for a night).
+  type Holder = StayExtensionTakenRoom["heldBy"][number];
+  const groups = useMemo(() => {
+    const by = new Map<string, { holder: Holder; rooms: Array<{ room: StayExtensionTakenRoom; holder: Holder }> }>();
+    for (const r of rooms) {
+      for (const h of r.heldBy) {
+        const g = by.get(h.entryId) ?? { holder: h, rooms: [] };
+        g.rooms.push({ room: r, holder: h });
+        by.set(h.entryId, g);
+      }
+    }
+    return [...by.values()].filter((g) => g.rooms.length > 1 && g.rooms.every((x) => x.holder.swappable));
+  }, [rooms]);
+  const [groupTo, setGroupTo] = useState<Record<string, string>>({});
   return (
     <div className={`ext-taken${busy ? " busy" : ""}`} aria-busy={busy || undefined}>
       {rooms.length > 1 ? (
@@ -989,6 +1006,77 @@ function TakenRooms({
           For each room: move our guest to a free room, or move their booking instead so our guest stays.
         </p>
       ) : null}
+      {groups.map((g) => {
+        const h = g.holder;
+        const keyOf = (roomId: string) => `${h.entryId}|${roomId}`;
+        const picked = g.rooms.map((x) => groupTo[keyOf(x.room.roomId)] ?? "");
+        const allPicked = picked.every(Boolean);
+        const nos = g.rooms.map((x) => x.room.roomNumber);
+        const list = nos.length > 1 ? `${nos.slice(0, -1).join(", ")} and ${nos[nos.length - 1]}` : nos[0];
+        return (
+          <div key={h.entryId} className="ext-taken-room ext-taken-group">
+            <div className="etr-head">
+              <b>{h.guestName ?? h.entryId}</b>
+              <span className="meta">{[h.partyName, h.entryId, `at ${stepWord(h.stage)}`].filter(Boolean).join(" · ")}</span>
+              {notArrived(h.stage) ? <span className="etr-notin">not arrived yet</span> : null}
+            </div>
+            <p className="sm etr-group-lead">
+              Their booking holds Rooms {list}. {notArrived(h.stage) ? "Nobody is in those rooms yet, so their" : "Their guests are in the hotel, but their"} booking can be moved out of all {g.rooms.length} at once, and our guest keeps every room.
+            </p>
+            <table className="etr-group-table">
+              <tbody>
+                {g.rooms.map((x, i) => {
+                  const k = keyOf(x.room.roomId);
+                  const others = new Set(picked.filter((v, j) => v && j !== i));
+                  const open = x.holder.rooms.filter((c) => !others.has(c.roomId));
+                  return (
+                    <tr key={k}>
+                      <td>
+                        Room <b>{x.room.roomNumber}</b>
+                        {x.holder.nightsInRoom.length ? <span className="meta"> · {nightsWords(x.holder.nightsInRoom)}</span> : null}
+                      </td>
+                      <td className="etr-group-arrow">→</td>
+                      <td>
+                        <select
+                          className="input"
+                          aria-label={`Move their booking out of Room ${x.room.roomNumber} to`}
+                          value={groupTo[k] ?? ""}
+                          onChange={(e) => setGroupTo((cur) => ({ ...cur, [k]: e.target.value }))}
+                        >
+                          <option value="">{open.length ? "Pick a room for them…" : "No other room is free"}</option>
+                          {open.map((c) => (
+                            <option key={c.roomId} value={c.roomId}>
+                              Room {c.roomNumber} · {c.roomTypeName} · {c.sameType ? "same type, they keep their price" : "another type"}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            <div className="etr-swap">
+              <Button
+                className={allPicked && !busy ? "go" : undefined}
+                state={allPicked && !busy ? "default" : "inert"}
+                title={allPicked ? undefined : "Pick a room for each of their rooms first"}
+                onClick={() => onSwap(g.rooms.map((x) => ({ entryId: h.entryId, fromRoomId: x.room.roomId, toRoomId: groupTo[keyOf(x.room.roomId)]! })))}
+              >
+                Move their booking out of {g.rooms.length} rooms
+              </Button>
+              {!allPicked ? (
+                <span className="meta sm">
+                  {picked.filter(Boolean).length} of {g.rooms.length} picked
+                </span>
+              ) : null}
+              <Help label="About moving their booking">
+                One room move for all of them: their booking keeps its step, its price is kept for the same type (another type asks), and its papers are made again and held for you to send. It stays moved even if this stay is not extended.
+              </Help>
+            </div>
+          </div>
+        );
+      })}
       {rooms.map((r) => {
         const v = choice[r.roomId];
         return (
@@ -1007,6 +1095,7 @@ function TakenRooms({
                   · {h.entryId} · at {stepWord(h.stage)}
                   {h.checkIn && h.checkOut ? ` · ${fmtDay(h.checkIn)} → ${fmtDay(h.checkOut)}` : ""}
                 </span>
+                {notArrived(h.stage) ? <span className="etr-notin">not arrived yet</span> : null}
               </div>
             ))}
             <Choice options={TAKEN_CHOICES} value={v ?? null} onChange={(w) => onChoice(r.roomId, w)} />

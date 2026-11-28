@@ -3052,6 +3052,14 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .etr-taken { color: var(--danger); font-weight: 700; font-size: var(--t-sm); }
 .ds .ext-taken-room.chosen .etr-taken { color: var(--ink-2); font-weight: 600; }
 .ds .etr-who { font-size: var(--t-sm); }
+/* A booking holding several of the guest's rooms, moved out of all of them at once (2026-11-28). */
+.ds .ext-taken-room.ext-taken-group { border-color: var(--warning-line); border-left-color: var(--warning); }
+.ds .etr-group-lead { margin: 0; }
+.ds .etr-notin { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border: 1px solid var(--warning-line); border-radius: 3px; background: var(--warning-soft); color: var(--ink); font-size: 12px; font-weight: 600; margin-left: 6px; }
+.ds .etr-group-table { border-collapse: collapse; }
+.ds .etr-group-table td { padding: 3px 8px 3px 0; vertical-align: middle; }
+.ds .etr-group-table select { min-width: 300px; max-width: 420px; }
+.ds .etr-group-arrow { color: var(--ink-2); }
 .ds .etr-field { max-width: 460px; margin: 0; }
 .ds .etr-swap { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
 .ds .etr-swap .etr-field { flex: 1 1 280px; }
