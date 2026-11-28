@@ -747,6 +747,8 @@
 .ds .rchart .tape td.seg { height: 30px; padding: 3px 2px; vertical-align: middle; }
 .ds .rchart .tape .seg .bar { width: 100%; height: 24px; border-radius: 4px; padding: 0 7px; display: flex; align-items: center; gap: 4px; font: inherit; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 0; text-align: left; cursor: pointer; }
 .ds .rchart .tape .seg .bar .st { font-weight: 400; opacity: .85; }
+/* The desk's own tag on a bar (2026-11-28): a quiet box in the bar's own ink, after the name. */
+.ds .rchart .tape .seg .bar .tg { flex: none; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px; font-size: 11px; font-weight: 500; line-height: 15px; opacity: .8; }
 .ds .rchart .tape .seg.cont-l .bar { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .ds .rchart .tape .seg.cont-r .bar { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 /* the kinds — the legend draws the same swatches */

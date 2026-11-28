@@ -52,6 +52,7 @@ import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { LoadFailed, LoadingBlock } from "@/components/ds/ui";
 import { useSession } from "@/hooks/use-session";
 import { getRoomChart, type ChartBarKind, type RoomChart, type RoomChartBar, type RoomChartBooking, type RoomChartPick } from "@/lib/api/rooms";
@@ -1274,6 +1275,11 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
   const nameOf = (b?: RoomChartBooking) => (b ? rowNameOf(b) : "Booking");
   /** The name drawn on a bar: the guest's, or the caller's when the desk chose callers. */
   const barNameOf = (b?: RoomChartBooking) => (b ? (byCaller ? callerOfBooking(b) : rowNameOf(b)) : "Booking");
+  /** The desk's own tag on a bar, after the name (2026-11-28, operator: "it should show there as well"). */
+  const barTagOf = (b?: RoomChartBooking) => {
+    const t = b?.inquiry?.deskTag?.trim();
+    return t ? <span className="tg" title="The desk's own note — never on a paper or an email">{t}</span> : null;
+  };
   // The card opens after the pointer has rested a second, so sweeping across the table shows nothing.
   const point = (h: Hover) => {
     if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
@@ -2162,6 +2168,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                                   <>
                                     {one.parked ? <span className="pk">Parked</span> : null}
                                     {barNameOf(pb)}
+                                    {barTagOf(pb)}
                                     <span className="st"> · picked, not held</span>
                                   </>
                                 ) : (
@@ -2265,6 +2272,7 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                             >
                               {s.bar.parked ? <span className="pk">Parked</span> : null}
                               {barNameOf(b)}
+                              {barTagOf(b)}
                               {s.span > 1 && b ? <span className="st"> · {STEP_NAMES[stepNoOfStage(b.stage) - 1]}</span> : null}
                             </button>
                             {(() => {
@@ -2535,7 +2543,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   const b = bookingOf.get(p.entryId);
                   return (
                     <button key={p.entryId} type="button" className="pl-row" onClick={() => router.push(`/bookings/${p.entryId}`)}>
-                      <b>{nameOf(b)}</b>
+                      <b>
+                        {nameOf(b)}
+                        <DeskTagText tag={b?.inquiry?.deskTag} />
+                      </b>
                       <span>
                         {p.entryId} · {b ? STEP_NAMES[stepNoOfStage(b.stage) - 1] : ""}
                         {p.parked ? " · parked" : ""}
@@ -2580,7 +2591,10 @@ export function RoomChartView({ onOpenRoom }: { onOpenRoom: (room: { id: string;
                   return (
                     <div key={x.entryId} className={`pl-row static clash-row e-${KIND_CLASS[x.kind]}`}>
                       <span className={`clash-state ${KIND_CLASS[x.kind]}`}>{clashRole(x, chart.today)}</span>
-                      <b>{nameOf(b)}</b>
+                      <b>
+                        {nameOf(b)}
+                        <DeskTagText tag={b?.inquiry?.deskTag} />
+                      </b>
                       <span>
                         {x.entryId}
                         {b ? ` · ${STEP_NAMES[stepNoOfStage(b.stage) - 1]}` : ""}
@@ -2746,12 +2760,14 @@ function HoverCard({
         </div>
         <div className="hc-body">
           {/* The big name is the one on the bar; the other name is a fact under it. */}
-          <div className="hc-name">{b ? (byCaller ? callerOfBooking(b) : rowNameOf(b)) : bar.entryId}</div>
+          <div className="hc-name">
+            {b ? (byCaller ? callerOfBooking(b) : rowNameOf(b)) : bar.entryId}
+            {/* The desk's own note to tell same-named guests apart (2026-11-25), beside the name as in every list. */}
+            <DeskTagText tag={b?.inquiry?.deskTag} />
+          </div>
           {b?.partyName ? <div className="hc-sub">Booked by {b.partyName}</div> : null}
           <div className="hc-facts">
             {b ? (byCaller ? fact("Guest", rowNameOf(b)) : fact("Caller", callerOfBooking(b))) : null}
-            {/* The desk's own note to tell same-named guests apart (2026-11-25). */}
-            {b?.inquiry?.deskTag ? fact("Tag", b.inquiry.deskTag) : null}
             {fact("Room", roomLine(room))}
             {fact("In this room", `${fmtRange(bar.from, bar.to)} · ${plural(nightsBetween(bar.from, bar.to), "night")} on the chart`)}
             {b?.checkInDate ? fact("Stay", `${fmtStay(b.checkInDate, b.checkOutDate)}${stay ? ` · ${plural(stay, "night")}` : ""}`) : null}

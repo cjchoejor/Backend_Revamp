@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Button } from "@/design-system";
 import { Help } from "@/components/ds/help";
+import { DeskTagText } from "@/components/ds/desk-tag";
 import { DsDialog } from "@/components/ds/steps/kit";
 import { useSession } from "@/hooks/use-session";
 import { getEntry } from "@/lib/api/entries";
@@ -326,6 +327,7 @@ export function BookingBox({
       title={
         <span className="bbox-title">
           {label}
+          <DeskTagText tag={booking.inquiry?.deskTag} />
           <span className="bbox-sub">
             {booking.entryId} · {step}
             {ci && co ? <> · <StayDates checkIn={ci} checkOut={co} /></> : null}
