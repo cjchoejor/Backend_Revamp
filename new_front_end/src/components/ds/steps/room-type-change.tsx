@@ -12,6 +12,7 @@
  * the booking comes back to this step. Before Arrival the system keeps a room of the new type for
  * the guest (no room number); from Arrival on the desk sees the room and may choose another.
  */
+import { ApiError } from "@/lib/api/client";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -147,7 +148,10 @@ export function RoomTypeDialog({
       {q.isLoading ? (
         <p className="meta">Asking the house which types are free…</p>
       ) : q.isError ? (
-        <p className="stop-ink sm" role="alert">The house could not be asked — close this and try again.</p>
+        <p className="stop-ink sm" role="alert">
+          {/* The server's own words when it refused (2026-11-28: on the last morning there is no night left to move). */}
+          {q.error instanceof ApiError && q.error.status < 500 ? q.error.message : "The house could not be asked — close this and try again."}
+        </p>
       ) : (
         <div className="rt-options" role="radiogroup" aria-label="The room types free for these nights">
           {(data?.options ?? []).map((o) => {

@@ -21,6 +21,7 @@
  * step, the agreed price kept (a change of type asks which), the papers made again and held, every
  * step traced on both bookings, the FOM's call.
  */
+import { ApiError } from "@/lib/api/client";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -168,7 +169,10 @@ export function ArrivalRoomDialog({
       {q.isLoading ? (
         <p className="meta">Asking the house which rooms can be given…</p>
       ) : q.isError ? (
-        <p className="stop-ink sm" role="alert">The house could not be asked — close this and try again.</p>
+        <p className="stop-ink sm" role="alert">
+          {/* The server's own words when it refused (2026-11-28: on the last morning there is no night left to move). */}
+          {q.error instanceof ApiError && q.error.status < 500 ? q.error.message : "The house could not be asked — close this and try again."}
+        </p>
       ) : (data?.choices ?? []).length === 0 ? (
         <p className="sm">There is no other room of this type.</p>
       ) : (

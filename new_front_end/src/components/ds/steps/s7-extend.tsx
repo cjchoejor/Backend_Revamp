@@ -1046,26 +1046,26 @@ function TakenRooms({
                               Our guest moves from Room {r.roomNumber} to, from {fmtDay(p.currentCheckOut)}
                             </label>
                             <select className="input" value={draft} onChange={(e) => setOursTo((cur) => ({ ...cur, [r.roomId]: e.target.value }))}>
-                              <option value="">Pick a free room…</option>
-                              {same.length ? (
-                                <optgroup label="Same type — keeps its rate">
-                                  {same.map((c) => (
-                                    <option key={c.roomId} value={c.roomId}>
-                                      Room {c.roomNumber} · {c.roomTypeName}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              ) : null}
-                              {other.length ? (
-                                <optgroup label="Another type — its rate is asked on Done">
-                                  {other.map((c) => (
-                                    <option key={c.roomId} value={c.roomId}>
-                                      Room {c.roomNumber} · {c.roomTypeName}
-                                    </option>
-                                  ))}
-                                </optgroup>
-                              ) : null}
+                              <option value="">{open.length ? "Pick a free room…" : "No room is free on every night"}</option>
+                              {same.map((c) => (
+                                <option key={c.roomId} value={c.roomId}>
+                                  Room {c.roomNumber} · {c.roomTypeName} · same type, keeps its rate
+                                </option>
+                              ))}
+                              {other.map((c) => (
+                                <option key={c.roomId} value={c.roomId}>
+                                  Room {c.roomNumber} · {c.roomTypeName} · another type
+                                </option>
+                              ))}
                             </select>
+                            {open.length ? (
+                              <p className="sm meta">
+                                {open.length === 1 ? `Only Room ${open[0].roomNumber} is` : `${open.length} rooms are`} free on every night from{" "}
+                                {fmtDay(p.extraNights[0] ?? p.currentCheckOut)} to {fmtDay(p.extraNights[p.extraNights.length - 1] ?? p.currentCheckOut)}
+                                {other.length ? " · for another type you choose its rate on Done" : ""}.
+                                {open.length < rooms.filter((x) => !ourMoves[x.roomId]).length ? " For the other rooms, move their booking instead." : ""}
+                              </p>
+                            ) : null}
                           </div>
                           <Button
                             className={draft && !busy ? "go" : undefined}
@@ -1117,24 +1117,16 @@ function TakenRooms({
                         </label>
                         <select className="input" value={to} onChange={(e) => setSwapTo((cur) => ({ ...cur, [key]: e.target.value }))}>
                           <option value="">Pick a room for them…</option>
-                          {same.length ? (
-                            <optgroup label="Same type — they keep their price">
-                              {same.map((x) => (
-                                <option key={x.roomId} value={x.roomId}>
-                                  Room {x.roomNumber} · {x.roomTypeName}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ) : null}
-                          {other.length ? (
-                            <optgroup label="Another type">
-                              {other.map((x) => (
-                                <option key={x.roomId} value={x.roomId}>
-                                  Room {x.roomNumber} · {x.roomTypeName}
-                                </option>
-                              ))}
-                            </optgroup>
-                          ) : null}
+                          {same.map((x) => (
+                            <option key={x.roomId} value={x.roomId}>
+                              Room {x.roomNumber} · {x.roomTypeName} · same type, they keep their price
+                            </option>
+                          ))}
+                          {other.map((x) => (
+                            <option key={x.roomId} value={x.roomId}>
+                              Room {x.roomNumber} · {x.roomTypeName} · another type
+                            </option>
+                          ))}
                         </select>
                       </div>
                       <Button
