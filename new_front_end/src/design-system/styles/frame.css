@@ -1708,11 +1708,12 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .ws-top .file .ftab:focus-visible { outline: none; box-shadow: var(--focus); }
 /* The counts on the booking file's tabs (2026-11-25, operator: "when there are notes or requests it shows the
    number right, can you highlight the number or make it prominent so the user knows this guest has some
-   request or notes"). A badge, as Atlassian draws one: requests still to arrange solid amber, notes solid blue,
+   request or notes"). A badge, as Atlassian draws one: requests still to arrange solid amber, notes solid red (blue until 2026-11-28),
    a late to-do red; papers a quiet grey count; guests outlined amber until everyone is recorded. */
 .ds .file .ftab .tab-n { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-2); font-size: 11.5px; font-weight: 700; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .ds .file .ftab .tab-n.req { background: var(--warning); border-color: var(--warning); color: #fff; }
-.ds .file .ftab .tab-n.note { background: var(--accent); border-color: var(--accent); color: #fff; }
+/* Notes red (2026-11-28, operator: "note number icon to be shown in red color than blue"). */
+.ds .file .ftab .tab-n.note { background: var(--danger); border-color: var(--danger); color: #fff; }
 /* An open to-do beside the notes, its own colour (2026-11-26, operator: "in 2 colors for notes as well"). */
 .ds .file .ftab .tab-n.todo { background: var(--warning); border-color: var(--warning); color: #fff; }
 .ds .file .ftab .tab-n.stop { background: var(--danger); border-color: var(--danger); color: #fff; }
