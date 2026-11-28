@@ -27,6 +27,7 @@ import { fmtDay } from "@/lib/ds/format";
 import { stepNoOfStage } from "@/lib/ds/steps";
 import { groupByRoomType } from "@/lib/ds/group-by-type";
 import { isZeroNightRow } from "@/lib/desk/party-rooms";
+import { barsTonight } from "@/lib/ds/rooms-tonight";
 
 function standingOfRoom(r: RoomListItem): RoomStanding {
   if (r.isUnderMaintenance || r.isBlocked) return "ooo";
@@ -67,16 +68,9 @@ function standingOfBar(b: RoomChartBar): RoomStanding {
 }
 
 function tonightByRoom(chart: RoomChart | undefined, today: string | null): Map<string, Tonight> | null {
-  if (!chart || !today) return null;
-  const out = new Map<string, Tonight>();
-  const rank: Record<string, number> = { OVERSTAY: 6, IN_HOUSE: 5, RESERVED: 4, MOVING: 3, HELD: 3, EXTENSION_HELD: 2, PROVISIONAL: 1, CHECKED_OUT: 0 };
-  for (const room of chart.rooms) {
-    const bars = chart.bars.filter((b) => b.roomId === room.id && b.kind !== "CHECKED_OUT");
-    const now = bars.filter((b) => b.from <= today && today < b.to).sort((a, b) => (rank[b.kind] ?? 0) - (rank[a.kind] ?? 0))[0] ?? null;
-    const next = bars.filter((b) => b.from > today).sort((a, b) => a.from.localeCompare(b.from))[0] ?? null;
-    out.set(room.id, { standing: now ? standingOfBar(now) : "free", bar: now, next });
-  }
-  return out;
+  const bars = barsTonight(chart, today);
+  if (!bars) return null;
+  return new Map([...bars].map(([id, { now, next }]) => [id, { standing: now ? standingOfBar(now) : "free", bar: now, next }]));
 }
 
 function physicalOfRoom(r: RoomListItem): RoomPhysical | undefined {

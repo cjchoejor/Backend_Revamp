@@ -2669,8 +2669,21 @@ body.rchart-dragging, body.rchart-dragging * { cursor: grabbing !important; user
 .ds .occ-meter .occ-k { font-size: 12px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.04em; }
 .ds .occ-meter .occ-n { font-size: 13px; color: var(--ink-2); text-align: right; }
 .ds .occ-meter .occ-n b { font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
-.ds .occ-meter .occ-bar { grid-column: 1 / -1; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
-.ds .occ-meter .occ-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
+/* One small square a room (2026-11-28, operator: "keep those the same height and width"), sorted by
+   how the room stands tonight, the count of each in the line under it. The colour is the state; each
+   square names its room on hover. */
+.ds .occ-meter { --occ-cell: 8px; --occ-gap: 3px; --occ-in: var(--accent); --occ-coming: #D3971A; --occ-out: #7C827D; --occ-free: #D3D7D0; }
+.ds .occ-meter .occ-cells { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: var(--occ-gap); max-width: calc(30 * (var(--occ-cell) + var(--occ-gap))); }
+.ds .occ-meter .occ-cells > i,
+.ds .occ-meter .occ-legend i { display: inline-block; flex: none; width: var(--occ-cell); height: var(--occ-cell); border-radius: 2px; background: var(--occ-free); }
+.ds .occ-meter i.in { background: var(--occ-in); }
+.ds .occ-meter i.coming { background: var(--occ-coming); }
+.ds .occ-meter i.held { background: #FBEFD9; box-shadow: inset 0 0 0 1.5px var(--occ-coming); }
+.ds .occ-meter i.out { background: var(--occ-out); }
+.ds .occ-meter i.wait { background: var(--line); }
+.ds .occ-meter .occ-legend { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; color: var(--ink-2); }
+.ds .occ-meter .occ-legend > span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.ds .occ-meter .occ-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 
 .ds .glance { display: grid; grid-template-columns: repeat(var(--tiles, 8), minmax(0, 1fr)); gap: var(--s2); }
 @media (max-width: 1100px) { .ds .glance { grid-template-columns: repeat(auto-fit, minmax(138px, 1fr)); } }

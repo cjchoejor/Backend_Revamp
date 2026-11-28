@@ -14,6 +14,7 @@
  */
 import { StayDates } from "@/components/ds/stay-dates";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useMemo, useState, type ReactNode } from "react";
 import { Button, EmptyState } from "@/design-system";
@@ -34,7 +35,10 @@ import { useDeskBookings, useDeskMoney, useRoomsList } from "@/hooks/use-desk-da
 import { useHotelClock } from "@/hooks/use-hotel-clock";
 import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { useHotelDay } from "@/hooks/use-hotel-day";
+import { useSession } from "@/hooks/use-session";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
+import { getRoomChart, type RoomChartBar, type RoomListItem } from "@/lib/api/rooms";
+import { barsTonight, isComingTonight, isHeldTonight, isInNow } from "@/lib/ds/rooms-tonight";
 import type { HousekeepingRoom } from "@/lib/api/housekeeping";
 import {
   attentionItems,
@@ -123,18 +127,76 @@ function Glance({ tiles, selected, onSelect }: { tiles: Tile[]; selected: TabId;
   );
 }
 
-/** Rooms occupied tonight, as a meter beside the title. */
-function Occupancy({ occupied, total }: { occupied: number; total: number }) {
-  if (!total) return null;
+/**
+ * Rooms tonight, one small square a room (2026-11-28, operator: "something like the first picture …
+ * keep those the same height and width"). Read off the house chart, the Rooms page's own reading of
+ * tonight: a guest in the room, a booking still to arrive, a room held and not confirmed, out of
+ * order, free. Occupied is the first two. Each square names its room on hover.
+ */
+type NightState = "in" | "coming" | "held" | "out" | "free";
+const NIGHT_ORDER: NightState[] = ["in", "coming", "held", "out", "free"];
+const NIGHT_WORDS: Record<NightState, string> = {
+  in: "in now",
+  coming: "still arriving",
+  held: "held, not confirmed",
+  out: "out of order",
+  free: "free",
+};
+
+function nightStateOf(r: RoomListItem, bar: RoomChartBar | null): NightState {
+  if (isInNow(bar)) return "in";
+  if (r.isUnderMaintenance || r.isBlocked) return "out";
+  if (isComingTonight(bar)) return "coming";
+  if (isHeldTonight(bar)) return "held";
+  return r.isDeficient ? "out" : "free";
+}
+
+function Occupancy({ rooms, tonight, failed }: { rooms: RoomListItem[]; tonight: ReturnType<typeof barsTonight>; failed: boolean }) {
+  if (!rooms.length) return null;
+  const cells = [...rooms]
+    .map((r) => ({ id: r.id, number: r.roomNumber, state: tonight ? nightStateOf(r, tonight.get(r.id)?.now ?? null) : null }))
+    .sort((a, b) =>
+      a.state && b.state && a.state !== b.state
+        ? NIGHT_ORDER.indexOf(a.state) - NIGHT_ORDER.indexOf(b.state)
+        : a.number.localeCompare(b.number, "en", { numeric: true }),
+    );
+  const count = (s: NightState) => cells.filter((c) => c.state === s).length;
+  const occupied = count("in") + count("coming");
+  const shown = NIGHT_ORDER.filter((s) => s === "in" || s === "coming" || s === "free" || count(s) > 0);
+  const summary = tonight
+    ? `${occupied} of ${rooms.length} rooms occupied tonight: ${shown.map((s) => `${count(s)} ${NIGHT_WORDS[s]}`).join(", ")}`
+    : failed
+      ? "Tonight's rooms could not be read"
+      : "Reading tonight's rooms";
   return (
-    <div className="occ-meter" title={`${occupied} of ${total} rooms have a guest in them tonight`}>
+    <div className="occ-meter">
       <span className="occ-k">Rooms tonight</span>
       <span className="occ-n">
-        <b>{occupied}</b> of {total} occupied
+        {tonight ? (
+          <>
+            <b>{occupied}</b> of {rooms.length} occupied
+          </>
+        ) : failed ? (
+          "could not be read"
+        ) : (
+          "reading…"
+        )}
       </span>
-      <span className="occ-bar" aria-hidden>
-        <i style={{ width: `${Math.round((occupied / total) * 100)}%` }} />
+      <span className="occ-cells" role="img" aria-label={summary}>
+        {cells.map((c) => (
+          <i key={c.id} className={c.state ?? "wait"} title={c.state ? `Room ${c.number} · ${NIGHT_WORDS[c.state]}` : `Room ${c.number}`} />
+        ))}
       </span>
+      {tonight ? (
+        <span className="occ-legend" aria-hidden>
+          {shown.map((s) => (
+            <span key={s}>
+              <i className={s} />
+              <b>{count(s)}</b> {NIGHT_WORDS[s]}
+            </span>
+          ))}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -384,6 +446,7 @@ function TodayPageInner() {
   const clock = useHotelClock(30_000);
   const hotelDay = useHotelDay();
   const today = hotelDay?.today ?? null;
+  const { session } = useSession();
   const bookings = useDeskBookings();
   const rooms = useRoomsList();
   const board = useHousekeepingBoard();
@@ -436,7 +499,14 @@ function TodayPageInner() {
   const owing = lists.leaving.filter(owes).length;
 
   const roomItems = rooms.data?.items ?? [];
-  const occupied = roomItems.filter((r) => r.currentClaimState?.toUpperCase() === "OCCUPIED").length;
+  // Tonight, read off the house chart: who is in each room, and who is still to come.
+  const tonightChart = useQuery({
+    queryKey: ["room-chart", "tonight", today],
+    queryFn: () => getRoomChart(session!, { from: today!, nights: 1 }),
+    enabled: !!session && !!today,
+    refetchInterval: 60_000,
+  });
+  const tonight = useMemo(() => barsTonight(tonightChart.data, today), [tonightChart.data, today]);
   const toClean = (board.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN");
   const lateRooms = toClean.filter((r) => r.toClean?.overdue || (r.toClean?.cleanBy && Date.parse(r.toClean.cleanBy) <= clock.now));
   const neededToday = toClean.filter((r) => r.nextGuest?.arrivesToday).length;
@@ -615,7 +685,7 @@ function TodayPageInner() {
           <div className="meta">{today ? fmtLongDate(today) : "Checking the hotel's date…"}</div>
         </div>
         <div className="today-acts">
-          <Occupancy occupied={occupied} total={roomItems.length} />
+          <Occupancy rooms={roomItems} tonight={tonight} failed={!!tonightChart.error && !tonightChart.data} />
           <Button onClick={() => router.push("/bookings/new")}>New booking</Button>
         </div>
       </div>
