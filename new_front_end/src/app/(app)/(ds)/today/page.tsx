@@ -37,21 +37,22 @@ import { useHousekeepingBoard } from "@/hooks/use-housekeeping";
 import { useHotelDay } from "@/hooks/use-hotel-day";
 import { useSession } from "@/hooks/use-session";
 import type { DeskListRow, DeskMoneyRow } from "@/lib/api/desk";
-import { getRoomChart, type RoomChartBar, type RoomListItem } from "@/lib/api/rooms";
-import { barsTonight, isComingTonight, isHeldTonight, isInNow } from "@/lib/ds/rooms-tonight";
+import { getRoomChart, type RoomChart, type RoomChartBar, type RoomListItem } from "@/lib/api/rooms";
+import { barsTonight, isComingTonight, isDueOutStillIn, isHeldTonight, isStayingTonight } from "@/lib/ds/rooms-tonight";
 import type { HousekeepingRoom } from "@/lib/api/housekeeping";
 import {
   attentionItems,
   dayLists,
   foldAttention,
   isFold,
+  arrivalLate,
   nightsLeft,
   waitingText,
   type AttentionItem,
   type Fold,
 } from "@/lib/ds/attention";
 import { fmtDay, fmtInstantDay, fmtLongDate, fmtRange, fmtTime, money, plural, span } from "@/lib/ds/format";
-import { bookerOfRow, channelWord, rowNameOf } from "@/lib/ds/status";
+import { bookerOfRow, callerNameOf, channelWord, guestNameOf, rowNameOf } from "@/lib/ds/status";
 import { stepNoOfStage } from "@/lib/ds/steps";
 
 const BANDS_OVER = 15;
@@ -67,6 +68,11 @@ type Tone = "stop" | "warn" | "ok" | null;
  * handed out (an import may have no count); a booking always takes at least one.
  */
 function roomsANight(r: DeskListRow): number {
+  // In house the rooms the guest is in (the server's rule): a room taken off the stay, or left in a
+  // move, no longer counts, though the rooms asked for still say so (2026-11-28, operator: In-house
+  // read 16 rooms against 14 with a guest in them).
+  const step = stepNoOfStage(r.currentStage);
+  if ((step === 7 || step === 8) && r.roomNumbers.length) return r.roomNumbers.length;
   return r.numberOfRooms || r.roomNumbers.length || 1;
 }
 const roomsOf = (rows: DeskListRow[]) => rows.reduce((n, r) => n + roomsANight(r), 0);
@@ -130,31 +136,75 @@ function Glance({ tiles, selected, onSelect }: { tiles: Tile[]; selected: TabId;
 /**
  * Rooms tonight, one small square a room (2026-11-28, operator: "something like the first picture …
  * keep those the same height and width"). Read off the house chart, the Rooms page's own reading of
- * tonight: a guest in the room, a booking still to arrive, a room held and not confirmed, out of
- * order, free. Occupied is the first two. Each square names its room on hover.
+ * tonight, and drawn as tonight's guests (the operator's choice the same day): a guest staying
+ * tonight; a booking still to arrive — even into a room whose guest is due out and still in, since
+ * tonight is the arrival's; held, not confirmed; a guest due out and still in with nobody arriving;
+ * out of order; free. Occupied tonight is the staying and the still arriving. Each square names its
+ * room and who holds it on hover.
  */
-type NightState = "in" | "coming" | "held" | "out" | "free";
-const NIGHT_ORDER: NightState[] = ["in", "coming", "held", "out", "free"];
+type NightState = "in" | "coming" | "held" | "due" | "out" | "free";
+const NIGHT_ORDER: NightState[] = ["in", "coming", "held", "due", "out", "free"];
 const NIGHT_WORDS: Record<NightState, string> = {
-  in: "in now",
+  in: "staying",
   coming: "still arriving",
   held: "held, not confirmed",
+  due: "due out, still in",
   out: "out of order",
   free: "free",
 };
 
-function nightStateOf(r: RoomListItem, bar: RoomChartBar | null): NightState {
-  if (isInNow(bar)) return "in";
-  if (r.isUnderMaintenance || r.isBlocked) return "out";
-  if (isComingTonight(bar)) return "coming";
-  if (isHeldTonight(bar)) return "held";
-  return r.isDeficient ? "out" : "free";
+type NightCell = { id: string; number: string; state: NightState | null; title: string };
+
+function nightCellOf(
+  r: RoomListItem,
+  bars: RoomChartBar[] | null,
+  who: (b: RoomChartBar) => string,
+  checkInOf: (b: RoomChartBar) => string | null,
+  today: string,
+): NightCell {
+  const room = `Room ${r.roomNumber}`;
+  if (!bars) return { id: r.id, number: r.roomNumber, state: null, title: room };
+  const cell = (state: NightState, more = "") => ({ id: r.id, number: r.roomNumber, state, title: `${room} · ${NIGHT_WORDS[state]}${more}` });
+  const staying = bars.find(isStayingTonight);
+  if (staying) return cell("in", ` · ${who(staying)}`);
+  if (r.isUnderMaintenance || r.isBlocked) return cell("out");
+  const coming = bars.find(isComingTonight);
+  const leaving = bars.find(isDueOutStillIn);
+  if (coming) {
+    // The bar starts at the chart's first night; the booking's own check-in says whether it is late.
+    const ci = checkInOf(coming);
+    const due = ci && ci < today ? ` · due ${fmtDay(ci)}, late` : "";
+    return cell("coming", ` · ${who(coming)}${due}${leaving ? ` · ${who(leaving)} is due out and still in` : ""}`);
+  }
+  const held = bars.find(isHeldTonight);
+  if (held) return cell("held", ` · ${who(held)}`);
+  if (leaving) return cell("due", ` · ${who(leaving)}`);
+  return cell(r.isDeficient ? "out" : "free");
 }
 
-function Occupancy({ rooms, tonight, failed }: { rooms: RoomListItem[]; tonight: ReturnType<typeof barsTonight>; failed: boolean }) {
+function Occupancy({
+  rooms,
+  chart,
+  today,
+  failed,
+}: {
+  rooms: RoomListItem[];
+  chart: RoomChart | undefined;
+  today: string | null;
+  failed: boolean;
+}) {
+  const tonight = useMemo(() => barsTonight(chart, today), [chart, today]);
+  const booking = useMemo(() => new Map((chart?.bookings ?? []).map((b) => [b.entryId, b])), [chart]);
   if (!rooms.length) return null;
+  const who = (bar: RoomChartBar) => {
+    const b = booking.get(bar.entryId);
+    if (!b) return bar.entryId;
+    const g = b.guestProfile && (b.guestProfile.firstName || b.guestProfile.lastName) ? guestNameOf(b.guestProfile) : null;
+    return g ?? callerNameOf(b.inquiry) ?? b.partyName ?? b.entryId;
+  };
+  const checkInOf = (bar: RoomChartBar) => booking.get(bar.entryId)?.checkInDate?.slice(0, 10) ?? null;
   const cells = [...rooms]
-    .map((r) => ({ id: r.id, number: r.roomNumber, state: tonight ? nightStateOf(r, tonight.get(r.id)?.now ?? null) : null }))
+    .map((r) => nightCellOf(r, tonight && today ? (tonight.get(r.id)?.all ?? []) : null, who, checkInOf, today ?? ""))
     .sort((a, b) =>
       a.state && b.state && a.state !== b.state
         ? NIGHT_ORDER.indexOf(a.state) - NIGHT_ORDER.indexOf(b.state)
@@ -170,7 +220,13 @@ function Occupancy({ rooms, tonight, failed }: { rooms: RoomListItem[]; tonight:
       : "Reading tonight's rooms";
   return (
     <div className="occ-meter">
-      <span className="occ-k">Rooms tonight</span>
+      <span className="occ-k">
+        Rooms tonight
+        <Help label="About rooms tonight">
+          One square a room. Occupied tonight counts the guests staying and the guests still to arrive. A guest due out who is still
+          in is shown apart: tonight their room is free, or the next guest&apos;s.
+        </Help>
+      </span>
       <span className="occ-n">
         {tonight ? (
           <>
@@ -184,7 +240,7 @@ function Occupancy({ rooms, tonight, failed }: { rooms: RoomListItem[]; tonight:
       </span>
       <span className="occ-cells" role="img" aria-label={summary}>
         {cells.map((c) => (
-          <i key={c.id} className={c.state ?? "wait"} title={c.state ? `Room ${c.number} · ${NIGHT_WORDS[c.state]}` : `Room ${c.number}`} />
+          <i key={c.id} className={c.state ?? "wait"} title={c.title} />
         ))}
       </span>
       {tonight ? (
@@ -506,7 +562,6 @@ function TodayPageInner() {
     enabled: !!session && !!today,
     refetchInterval: 60_000,
   });
-  const tonight = useMemo(() => barsTonight(tonightChart.data, today), [tonightChart.data, today]);
   const toClean = (board.data?.rooms ?? []).filter((r) => r.state === "TO_CLEAN");
   const lateRooms = toClean.filter((r) => r.toClean?.overdue || (r.toClean?.cleanBy && Date.parse(r.toClean.cleanBy) <= clock.now));
   const neededToday = toClean.filter((r) => r.nextGuest?.arrivesToday).length;
@@ -532,6 +587,8 @@ function TodayPageInner() {
   };
 
   const arrivalsTotal = lists.arriving.length + arrivedToday.length;
+  // Due before today and not come yet, but still holding tonight (2026-11-28).
+  const lateArrivals = lists.arriving.filter((r) => arrivalLate(r, today)).length;
   // Arriving, Leaving and In-house count bookings, the rooms beside them smaller (2026-11-24, the client's choice C).
   const roomsToCome = roomsOf(lists.arriving);
   const roomsArrived = roomsOf(arrivedToday);
@@ -561,17 +618,21 @@ function TodayPageInner() {
       n: lists.arriving.length,
       unit: lists.arriving.length === 1 ? "booking" : "bookings",
       extra: { n: roomsToCome, unit: roomsToCome === 1 ? "room" : "rooms" },
-      tone: arrivalsTotal && !lists.arriving.length ? "ok" : null,
+      tone: lateArrivals ? "warn" : arrivalsTotal && !lists.arriving.length ? "ok" : null,
       progress: { done: roomsArrived, total: roomsArriving },
       sub: arrivalsTotal ? (
         lists.arriving.length ? (
-          arrivedToday.length ? (
-            <>
-              still to come · already in: <b>{plural(arrivedToday.length, "booking")}</b>, <b>{plural(roomsArrived, "room")}</b>
-            </>
-          ) : (
-            "still to come · none checked in yet"
-          )
+          <>
+            still to come
+            {lateArrivals ? <> · <b className="warn-ink">{lateArrivals} late</b></> : null}
+            {arrivedToday.length ? (
+              <>
+                {" "}· already in: <b>{plural(arrivedToday.length, "booking")}</b>, <b>{plural(roomsArrived, "room")}</b>
+              </>
+            ) : (
+              " · none checked in yet"
+            )}
+          </>
         ) : (
           <span className="ok-ink">
             all {plural(arrivalsTotal, "booking")}, {plural(roomsArriving, "room")} checked in
@@ -685,7 +746,7 @@ function TodayPageInner() {
           <div className="meta">{today ? fmtLongDate(today) : "Checking the hotel's date…"}</div>
         </div>
         <div className="today-acts">
-          <Occupancy rooms={roomItems} tonight={tonight} failed={!!tonightChart.error && !tonightChart.data} />
+          <Occupancy rooms={roomItems} chart={tonightChart.data} today={today} failed={!!tonightChart.error && !tonightChart.data} />
           <Button onClick={() => router.push("/bookings/new")}>New booking</Button>
         </div>
       </div>
@@ -754,7 +815,18 @@ function TodayPageInner() {
                 done={arrivedToday}
                 doneWord="Checked in today"
                 heads={DAY_HEADS}
-                cells={(r) => dayCells(r, stay(r), today, dayMoney.byId.get(r.id))}
+                cells={(r) => {
+                  const due = arrivalLate(r, today);
+                  return dayCells(
+                    r,
+                    <>
+                      {stay(r)}
+                      {due ? <div className="meta"><b className="warn-ink">Late · due {fmtDay(due)}, not arrived</b></div> : null}
+                    </>,
+                    today,
+                    dayMoney.byId.get(r.id),
+                  );
+                }}
                 href={titles.arriving[1] ?? "/bookings"}
                 empty={["No arrivals today"]}
               />

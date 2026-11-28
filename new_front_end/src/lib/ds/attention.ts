@@ -278,7 +278,9 @@ export function dayLists(rows: DeskListRow[], hotelToday: string | null, tz: str
       continue;
     }
     if (r.status !== "ACTIVE") continue;
-    if (ci === hotelToday && step >= 4 && step <= 6) empty.arriving.push(r);
+    // Arriving today, and a booking due earlier that has not arrived and still holds tonight — late
+    // (2026-11-28, operator: a booking due yesterday held its rooms tonight and was on no list).
+    if (step >= 4 && step <= 6 && ci && (ci === hotelToday || (ci < hotelToday && !!co && co > hotelToday))) empty.arriving.push(r);
     if (step === 7 || step === 8) {
       empty.inHouse.push(r);
       if (co === hotelToday || (co && co < hotelToday)) empty.leaving.push(r);
@@ -289,10 +291,18 @@ export function dayLists(rows: DeskListRow[], hotelToday: string | null, tz: str
       else if (ci < hotelToday) empty.noOutcome.push(r);
     }
   }
-  empty.arriving.sort((a, b) => stepNoOfStage(b.currentStage) - stepNoOfStage(a.currentStage));
+  empty.arriving.sort((a, b) => stepNoOfStage(b.currentStage) - stepNoOfStage(a.currentStage) || (a.checkInDate ?? "").localeCompare(b.checkInDate ?? ""));
   empty.newInquiries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   empty.parked.sort((a, b) => (a.parkFollowUpAt ?? "").localeCompare(b.parkFollowUpAt ?? ""));
   return empty;
+}
+
+/** An arrival due before the hotel's today that has not come yet: "due 27 Nov · late". */
+export function arrivalLate(r: DeskListRow, hotelToday: string | null): string | null {
+  const ci = r.checkInDate?.slice(0, 10) ?? null;
+  const step = stepNoOfStage(r.currentStage);
+  if (!ci || !hotelToday || ci >= hotelToday || step < 4 || step > 6) return null;
+  return ci;
 }
 
 /** Nights left for an in-house guest: "leaves today" or "2 nights left". */
