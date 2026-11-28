@@ -160,6 +160,18 @@ export function RoomsTable({
    * The figures still show: the operator has to be able to read what the booking is priced at.
    */
   const inHouse = entry.currentStage === "S7";
+  // In house the table is about tonight onward, and a room that left took its guests with it
+  // (2026-11-28): the slept nights are billed as they were, and the rooms still in use are not
+  // asked to hold guests who have gone.
+  const roomsLeft = useMemo(
+    () =>
+      // A room brought back by mistake held the guests of a room already gone: it takes nobody.
+      (entry.roomDepartures ?? []).filter((d) => d.feeBasis?.guestsOfItsOwn !== false).map((d) => {
+        const c = seed.find((x) => x.roomId === d.roomId);
+        return { fromDate: d.departureDate.slice(0, 10), ad: c?.adultCount ?? 0, c6: c?.cnb6To10Count ?? 0, u6: c?.cnbUnder6Count ?? 0 };
+      }),
+    [entry.roomDepartures, seed],
+  );
 
   const canon = (list: readonly RoomCompositionInput[] | undefined) => {
     const n = (v: unknown) => (v == null || v === "" ? "" : String(Number(v)));
@@ -334,6 +346,8 @@ export function RoomsTable({
         entryChildAges={entry.childAges ?? null}
         entryId={entry.id}
         roomDates={roomDates}
+        fromNight={inHouse ? hotelToday : null}
+        roomsLeft={roomsLeft}
         roomLabels={roomNames.labels}
         initialCompositions={seed}
         nightView={nightView}

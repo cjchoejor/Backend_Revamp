@@ -794,9 +794,23 @@ function RoomCompositionsGrid({
   lockCommercial,
   readOnly,
   previewStay,
+  fromNight,
+  roomsLeft,
 }: DiscountEdit & {
   /** This stay's rows inside a table shared by several stays (2026-11-09). */
   grouped?: GroupedSection;
+  /**
+   * In house (2026-11-28): the first night the table shows and judges — tonight. The nights
+   * before are slept; they are billed as they were and cannot be changed here. Shown, they read
+   * as nights with rooms missing, since the rooms the guest left are not rows of this table.
+   */
+  fromNight?: string | null;
+  /**
+   * Rooms that left the stay before its end, with their guests by band (2026-11-28) — a room
+   * taken off, or one leaving early, the rest staying. From `fromDate` on the party is smaller by
+   * them: the table does not ask the rooms still in use to hold guests who have gone.
+   */
+  roomsLeft?: Array<{ fromDate: string; ad: number; c6: number; u6: number }>;
   /** Price for a stay the booking does not hold yet — a change of dates on the step (2026-10-29). */
   previewStay?: { checkInDate: string; checkOutDate: string } | null;
   /**
@@ -1053,10 +1067,46 @@ function RoomCompositionsGrid({
     }
   };
 
-  const envAdults = Math.max(0, entryAdults ?? 0);
+  /** The guests of rooms that left the stay by a night, by band (2026-11-28). */
+  const leftBy = (night: string | null) => {
+    const out = { ad: 0, c6: 0, u6: 0 };
+    if (!night) return out;
+    for (const l of roomsLeft ?? []) {
+      if (l.fromDate > night) continue;
+      out.ad += l.ad;
+      out.c6 += l.c6;
+      out.u6 += l.u6;
+    }
+    return out;
+  };
+  /**
+   * The party still here on the first night shown (2026-11-28): everyone, less the guests of rooms
+   * that left by then — adults first for the 11-and-over band, then the children's ages by band.
+   * The rooms the party needs are asked for it, not for guests who have gone.
+   */
+  const partyNow = useMemo(() => {
+    const gone = leftBy(fromNight ?? null);
+    const ages = [...(entryChildAges ?? [])];
+    const drop = (pred: (a: number) => boolean, n: number) => {
+      for (let i = 0; i < n; i++) {
+        const j = ages.findIndex(pred);
+        if (j < 0) break;
+        ages.splice(j, 1);
+      }
+    };
+    drop((a) => a > youngMax && a <= childMax, gone.c6);
+    drop((a) => a <= youngMax, gone.u6);
+    let adults = Math.max(0, entryAdults ?? 0);
+    const fromAdults = Math.min(adults, gone.ad);
+    adults -= fromAdults;
+    drop((a) => a > childMax, gone.ad - fromAdults);
+    return { adults, childAges: ages };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryAdults, entryChildAges, youngMax, childMax, fromNight, JSON.stringify(roomsLeft ?? [])]);
+  const envAdults = partyNow.adults;
   const roomEnvelopeQuery = useQuery({
-    queryKey: ["lookup", "allowed-room-counts", envAdults, (entryChildAges ?? []).join(",")],
-    queryFn: () => getAllowedRoomCounts(session!, { adults: envAdults, childAges: entryChildAges ?? [] }),
+    queryKey: ["lookup", "allowed-room-counts", envAdults, partyNow.childAges.join(",")],
+    queryFn: () => getAllowedRoomCounts(session!, { adults: envAdults, childAges: partyNow.childAges }),
     enabled: !!session && envAdults > 0,
   });
   const roomMin = roomEnvelopeQuery.data?.allowedRoomCounts.min ?? null;
@@ -1244,12 +1294,14 @@ function RoomCompositionsGrid({
   // fallback editor for those).
   const partyBands = useMemo(() => {
     const ages = entryChildAges ?? [];
+    const gone = leftBy(fromNight ?? null);
     return {
-      ad: Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length,
-      c6: ages.filter((a) => a > youngMax && a <= childMax).length,
-      u6: ages.filter((a) => a <= youngMax).length,
+      ad: Math.max(0, Math.max(0, entryAdults ?? 0) + ages.filter((a) => a > childMax).length - gone.ad),
+      c6: Math.max(0, ages.filter((a) => a > youngMax && a <= childMax).length - gone.c6),
+      u6: Math.max(0, ages.filter((a) => a <= youngMax).length - gone.u6),
     };
-  }, [entryAdults, entryChildAges, youngMax, childMax]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [entryAdults, entryChildAges, youngMax, childMax, fromNight, JSON.stringify(roomsLeft ?? [])]);
   const partyBound = (entryAdults ?? 0) + (entryChildAges?.length ?? 0) > 0;
 
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
@@ -2005,17 +2057,25 @@ function RoomCompositionsGrid({
   const roomsOn = (night: string) => sealedRoomIds.filter((id) => (nightsOf(id) ?? []).includes(night));
   const sumOver = (ids: string[], col: NumCol) => ids.reduce((s, id) => s + cnt(rows[id]?.[col] ?? "0"), 0);
   const guestsOver = (ids: string[]) => sumOver(ids, "ad") + sumOver(ids, "c6") + sumOver(ids, "u6");
+  /** The nights judged: in house, tonight onward (2026-11-28). */
+  const judgedNights = fromNight ? allNights.filter((n) => n >= fromNight) : allNights;
   /** The night the table reconciles against: the one holding the most guests. */
-  const busiestNight = splitStay && allNights.length
-    ? allNights.reduce((best, n) => (guestsOver(roomsOn(n)) > guestsOver(roomsOn(best)) ? n : best), allNights[0])
+  const busiestNight = splitStay && judgedNights.length
+    ? judgedNights.reduce((best, n) => (guestsOver(roomsOn(n)) > guestsOver(roomsOn(best)) ? n : best), judgedNights[0])
     : null;
   const idsForTotals = busiestNight ? roomsOn(busiestNight) : sealedRoomIds;
   const sum = (col: NumCol) => sumOver(idsForTotals, col);
   const totalGuests = guestsOver(idsForTotals);
-  const partySize = (entryAdults ?? 0) + (entryChildAges?.length ?? 0);
+  const fullPartySize = (entryAdults ?? 0) + (entryChildAges?.length ?? 0);
+  /** The party on a night: everyone, less the guests of rooms that left by then (2026-11-28). */
+  const partyOn = (night: string | null) => {
+    const gone = leftBy(night);
+    return Math.max(0, fullPartySize - gone.ad - gone.c6 - gone.u6);
+  };
+  const partySize = partyOn(fromNight ?? null);
   /** Nights whose rooms do not hold the party between them — named in the fault list. */
   const nightsShort = splitStay && partySize > 0
-    ? allNights.filter((n) => guestsOver(roomsOn(n)) !== partySize)
+    ? judgedNights.filter((n) => guestsOver(roomsOn(n)) !== partyOn(n))
     : [];
 
   // ---- The table, night by night (2026-10-22, operator) -------------------------------
@@ -2028,7 +2088,8 @@ function RoomCompositionsGrid({
   // Any stay of more than one night may be read night by night (2026-10-22): meals and extra
   // beds can differ by night on any stay, not only on one that changes rooms. A stay with the
   // same rooms every night opens on the whole stay; one that changes rooms, on every night.
-  const pickerNights = splitStay ? allNights : stayNightList;
+  const stayPickerNights = splitStay ? allNights : stayNightList;
+  const pickerNights = fromNight ? stayPickerNights.filter((n) => n >= fromNight) : stayPickerNights;
   const nightsEditable = datesShown && pickerNights.length > 1;
   const viewKey = nightView || (splitStay ? "all" : "stay");
   const roomsOnNight = (n: string) => sealedRoomIds.filter((id) => nightListOf(id).includes(n));
@@ -2114,10 +2175,11 @@ function RoomCompositionsGrid({
         // Each night on its own: the rooms in use that night must hold the party between them.
         for (const n of nightsShort) {
           const g = guestsOver(roomsOn(n));
+          const p = partyOn(n);
           out.push(
-            g < partySize
-              ? `${shortNight(n)} — ${partySize - g} of the booking's ${partySize} guests are not in a room`
-              : `${shortNight(n)} — ${g} guests are placed but the booking has ${partySize}`,
+            g < p
+              ? `${shortNight(n)} — ${p - g} of the booking's ${p} guests are not in a room`
+              : `${shortNight(n)} — ${g} guests are placed but the booking has ${p}`,
           );
         }
       } else if (totalGuests !== partySize) {
@@ -2313,21 +2375,22 @@ function RoomCompositionsGrid({
    *  hold the whole party and red while they do not. */
   const nightBand = (night: string, ids: string[]) => {
     const g = guestsOver(ids);
-    const short = partySize > 0 && g !== partySize;
+    const nightParty = partyOn(night);
+    const short = nightParty > 0 && g !== nightParty;
     return (
       <tr className="nightband">
         <td colSpan={colCount}>
           <div className="nb-in">
             <b className="nb-date">{nightLabel(night)}</b>
             <span className="nb-meta">
-              night {pickerNights.indexOf(night) + 1} of {pickerNights.length} · {ids.length} room{ids.length === 1 ? "" : "s"}
+              night {stayPickerNights.indexOf(night) + 1} of {stayPickerNights.length} · {ids.length} room{ids.length === 1 ? "" : "s"}
             </span>
-            {partySize > 0 && (
+            {nightParty > 0 && (
               <span
                 className={`nb-tally${short ? " off" : ""}`}
-                title={short ? `The rooms that night hold ${g} of the booking's ${partySize} guests` : "Every guest has a room that night"}
+                title={short ? `The rooms that night hold ${g} of the booking's ${nightParty} guests` : "Every guest has a room that night"}
               >
-                {g} of {partySize} guests
+                {g} of {nightParty} guests
               </span>
             )}
           </div>
@@ -2420,14 +2483,18 @@ function RoomCompositionsGrid({
                 aria-label="Night shown"
                 title={nightsShort.length ? `Short of guests on ${nightsShort.map(shortNight).join(", ")}` : "Every night holds the whole party"}
               >
-                {!splitStay && <option value="stay">{grouped ? "Whole stay" : `Whole stay · ${pickerNights.length} nights`}</option>}
+                {!splitStay && (
+                  <option value="stay">
+                    {grouped ? "Whole stay" : fromNight ? `Tonight on · ${pickerNights.length} nights` : `Whole stay · ${pickerNights.length} nights`}
+                  </option>
+                )}
                 <option value="all">All nights · {pickerNights.length}</option>
-                {pickerNights.map((n, i) => {
+                {pickerNights.map((n) => {
                   const ids = roomsOnNight(n);
-                  const short = partySize > 0 && guestsOver(ids) !== partySize;
+                  const short = partyOn(n) > 0 && guestsOver(ids) !== partyOn(n);
                   return (
                     <option key={n} value={n}>
-                      {`Night ${i + 1} · ${nightLabel(n)} · ${ids.length} room${ids.length === 1 ? "" : "s"}${short ? " · short" : ""}`}
+                      {`Night ${stayPickerNights.indexOf(n) + 1} · ${nightLabel(n)} · ${ids.length} room${ids.length === 1 ? "" : "s"}${short ? " · short" : ""}`}
                     </option>
                   );
                 })}

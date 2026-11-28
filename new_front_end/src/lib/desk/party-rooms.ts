@@ -107,7 +107,9 @@ export function partySeatingIssues(entry: EntryDetail, youngMax = 5, childMax = 
     const group = groups.find((g) => g.includes(id));
     return !group || !group.some((other) => occupants(other) > 0);
   });
-  const strayRooms = comps.map((c) => c.roomId).filter((id) => !!id && !planSet.has(id));
+  // A row of a room that left the stay is history, not a guest without a room (2026-11-28).
+  const left = new Set((entry.roomDepartures ?? []).map((d) => d.roomId));
+  const strayRooms = comps.map((c) => c.roomId).filter((id) => !!id && !planSet.has(id) && !left.has(id));
   return { unseated, emptyRooms, strayRooms, ok: unseated.length === 0 && emptyRooms.length === 0 && strayRooms.length === 0 };
 }
 

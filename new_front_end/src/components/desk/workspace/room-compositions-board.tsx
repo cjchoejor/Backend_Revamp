@@ -1173,6 +1173,9 @@ export function RoomCompositionPlanner(props: DiscountEdit & {
   entryChildAges?: number[] | null;
   /** roomId → that room's own nights, display-ready. See RoomCompositionsTable. */
   roomDates?: Record<string, { label: string; nights: number }>;
+  /** In house: the first night shown, and the rooms that left with their guests — see RoomCompositionsTable (2026-11-28). */
+  fromNight?: string | null;
+  roomsLeft?: Array<{ fromDate: string; ad: number; c6: number; u6: number }>;
   /** A room the system may still move before Arrival — "Deluxe Double · room 1". See RoomCompositionsTable. */
   roomLabels?: Map<string, string>;
   /** Commit the table by pricing it — see RoomCompositionsTable. Table mode only. */

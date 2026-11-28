@@ -794,6 +794,8 @@ export type EntryDetail = EntryListItem & {
   /** Early departure (2026-08-22, Policy 36): the day the guest actually left when the stay was shortened. */
   actualCheckOutDate?: string | null;
   earlyDeparture?: EarlyDepartureSummary | null;
+  /** Rooms that left the stay before its end — taken off, or leaving early (2026-11-28). */
+  roomDepartures?: Array<{ id: string; roomId: string; roomNumber: string; departureDate: string; state: string; kind: string; feeBasis?: { guestsOfItsOwn?: boolean } | null }>;
 };
 
 /** One stay of a trip — the enquiry's other bookings, carried on every booking's payload. */
